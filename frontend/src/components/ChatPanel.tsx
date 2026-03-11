@@ -43,7 +43,12 @@ export function ChatPanel({
     setUi((s) => ({ ...s, loading: true }));
 
     try {
-      const res = await api.query(q, repoIds, conversationId);
+      // Send conversation history for context-aware follow-ups
+      const historyMsgs = messages.map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }));
+      const res = await api.query(q, repoIds, conversationId, historyMsgs);
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",

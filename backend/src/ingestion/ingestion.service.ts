@@ -29,11 +29,56 @@ const IGNORED_DIRS = new Set([
   '.next',
   'dist',
   'build',
+  'out',
   '.cache',
+  '.turbo',
   'vendor',
   'coverage',
   '.nyc_output',
+  '.venv',
+  'venv',
+  'target',
 ]);
+
+const DENIED_FILES = new Set([
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'composer.lock',
+  'Cargo.lock',
+  'Gemfile.lock',
+  'poetry.lock',
+]);
+
+const DENIED_EXTENSIONS = new Set([
+  '.min.js',
+  '.map',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.svg',
+  '.ico',
+  '.woff',
+  '.woff2',
+  '.ttf',
+  '.eot',
+  '.mp4',
+  '.mp3',
+  '.zip',
+  '.tar',
+  '.gz',
+  '.pdf',
+  '.exe',
+  '.dll',
+  '.so',
+  '.dylib',
+  '.bin',
+  '.dat',
+  '.db',
+  '.sqlite',
+]);
+
 const ALLOWED_EXTENSIONS = new Set([
   '.ts',
   '.tsx',
@@ -62,6 +107,7 @@ const ALLOWED_EXTENSIONS = new Set([
   '.h',
   '.kt',
   '.swift',
+  '.env.example',
 ]);
 
 @Injectable()
@@ -144,10 +190,13 @@ export class IngestionService {
 
       // Walk files
       job.status = 'parsing';
-      const files = this.walkDir(repoPath);
+      const walkStats = { skippedDirs: 0, deniedFiles: 0, unsupportedExt: 0 };
+      const files = this.walkDir(repoPath, walkStats);
       job.totalFiles = files.length;
       this.persistJob(job);
-      this.logger.log(`Found ${files.length} files to process`);
+      this.logger.log(
+        `Found ${files.length} files to process (skipped: ${walkStats.skippedDirs} dirs, ${walkStats.deniedFiles} denied, ${walkStats.unsupportedExt} unsupported ext)`,
+      );
 
       const allChunks: CodeChunk[] = [];
       for (const filePath of files) {
@@ -279,20 +328,45 @@ export class IngestionService {
     }
   }
 
-  private walkDir(dir: string): string[] {
+  private walkDir(
+    dir: string,
+    stats: {
+      skippedDirs: number;
+      deniedFiles: number;
+      unsupportedExt: number;
+    } = {
+      skippedDirs: 0,
+      deniedFiles: 0,
+      unsupportedExt: 0,
+    },
+  ): string[] {
     const results: string[] = [];
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (IGNORED_DIRS.has(entry.name)) continue;
+      if (IGNORED_DIRS.has(entry.name)) {
+        stats.skippedDirs++;
+        continue;
+      }
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        results.push(...this.walkDir(full));
+        results.push(...this.walkDir(full, stats));
       } else if (entry.isFile()) {
+        if (DENIED_FILES.has(entry.name)) {
+          stats.deniedFiles++;
+          continue;
+        }
+        if ([...DENIED_EXTENSIONS].some((ext) => entry.name.endsWith(ext))) {
+          stats.deniedFiles++;
+          continue;
+        }
         const ext = path.extname(entry.name).toLowerCase();
-        // Also capture .env, .env.example, .env.local, .env.template, .env.sample
         const isEnvFile =
           entry.name === '.env' || entry.name.startsWith('.env.');
-        if (ALLOWED_EXTENSIONS.has(ext) || isEnvFile) results.push(full);
+        if (ALLOWED_EXTENSIONS.has(ext) || isEnvFile) {
+          results.push(full);
+        } else {
+          stats.unsupportedExt++;
+        }
       }
     }
     return results;

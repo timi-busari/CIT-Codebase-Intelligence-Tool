@@ -1,18 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as path from 'path';
+import Parser from 'tree-sitter';
+import TypeScript from 'tree-sitter-typescript';
+import JavaScript from 'tree-sitter-javascript';
+import Python from 'tree-sitter-python';
 
 export interface CodeChunk {
   content: string;
   filePath: string;
   language: string;
   chunkType: 'function' | 'class' | 'heading' | 'window';
+  symbolName?: string;
   startLine: number;
   endLine: number;
 }
 
 const LANG_MAP: Record<string, string> = {
   '.ts': 'typescript',
-  '.tsx': 'typescript',
+  '.tsx': 'tsx',
   '.js': 'javascript',
   '.jsx': 'javascript',
   '.py': 'python',
@@ -27,14 +32,79 @@ const LANG_MAP: Record<string, string> = {
   '.php': 'php',
   '.vue': 'vue',
   '.svelte': 'svelte',
+  '.yaml': 'yaml',
+  '.yml': 'yaml',
+  '.toml': 'toml',
+  '.sh': 'bash',
+  '.bash': 'bash',
+  '.c': 'c',
+  '.cpp': 'cpp',
+  '.h': 'c',
+  '.kt': 'kotlin',
+  '.swift': 'swift',
+  '.json': 'json',
 };
 
-const WINDOW_TOKENS = 512;
+// Tree-sitter grammars for supported languages
+const GRAMMARS: Record<string, unknown> = {
+  typescript: TypeScript.typescript,
+  tsx: TypeScript.tsx,
+  javascript: JavaScript,
+  python: Python,
+};
+
+// AST node types that represent top-level semantic units per language
+const TOP_LEVEL_NODES: Record<string, Set<string>> = {
+  typescript: new Set([
+    'function_declaration',
+    'class_declaration',
+    'interface_declaration',
+    'type_alias_declaration',
+    'enum_declaration',
+    'export_statement',
+    'lexical_declaration',
+  ]),
+  tsx: new Set([
+    'function_declaration',
+    'class_declaration',
+    'interface_declaration',
+    'type_alias_declaration',
+    'enum_declaration',
+    'export_statement',
+    'lexical_declaration',
+  ]),
+  javascript: new Set([
+    'function_declaration',
+    'class_declaration',
+    'export_statement',
+    'lexical_declaration',
+    'variable_declaration',
+  ]),
+  python: new Set([
+    'function_definition',
+    'class_definition',
+    'decorated_definition',
+  ]),
+};
+
+const WINDOW_LINES = 512;
 const WINDOW_OVERLAP = 64;
+const MIN_CHUNK_LINES = 3;
 
 @Injectable()
 export class ChunkingService {
   private readonly logger = new Logger(ChunkingService.name);
+  private parsers = new Map<string, Parser>();
+
+  private getParser(language: string): Parser | null {
+    if (this.parsers.has(language)) return this.parsers.get(language)!;
+    const grammar = GRAMMARS[language];
+    if (!grammar) return null;
+    const parser = new Parser();
+    parser.setLanguage(grammar as Parser.Language);
+    this.parsers.set(language, parser);
+    return parser;
+  }
 
   async chunkFile(filePath: string, content: string): Promise<CodeChunk[]> {
     const ext = path.extname(filePath).toLowerCase();
@@ -46,17 +116,115 @@ export class ChunkingService {
       return this.chunkMarkdown(filePath, content);
     }
 
-    if (['typescript', 'javascript', 'python'].includes(language)) {
+    // Try tree-sitter AST-based chunking
+    const parser = this.getParser(language);
+    if (parser) {
+      const chunks = this.chunkByAST(parser, filePath, content, language);
+      if (chunks.length > 0) {
+        const header = this.extractFileHeader(filePath, content, language);
+        return header ? [header, ...chunks] : chunks;
+      }
+    }
+
+    // Regex fallback for TS/JS/Python when tree-sitter yields nothing
+    if (['typescript', 'tsx', 'javascript', 'python'].includes(language)) {
       const blocks = this.chunkByTopLevelBlocks(filePath, content, language);
-      // Prepend a file-header summary chunk listing all imports + exported
-      // symbol names. This makes inter-service wiring (e.g. HTTPHelper imports,
-      // service URL references) always retrievable independent of which block
-      // they appear in.
       const header = this.extractFileHeader(filePath, content, language);
       return header ? [header, ...blocks] : blocks;
     }
 
     return this.slidingWindowChunk(filePath, content, language);
+  }
+
+  // ── Tree-sitter AST chunking ────────────────────────────────────────────
+  private chunkByAST(
+    parser: Parser,
+    filePath: string,
+    content: string,
+    language: string,
+  ): CodeChunk[] {
+    const tree = parser.parse(content);
+    const topLevelTypes = TOP_LEVEL_NODES[language];
+    if (!topLevelTypes) return [];
+
+    const chunks: CodeChunk[] = [];
+    const rootNode = tree.rootNode;
+
+    for (let i = 0; i < rootNode.childCount; i++) {
+      const node = rootNode.child(i);
+      if (!node) continue;
+
+      if (topLevelTypes.has(node.type)) {
+        const text = node.text;
+        const startLine = node.startPosition.row + 1;
+        const endLine = node.endPosition.row + 1;
+
+        if (endLine - startLine + 1 < MIN_CHUNK_LINES) continue;
+
+        const symbolName = this.extractSymbolName(node);
+        const chunkType = this.classifyNode(node);
+
+        chunks.push({
+          content: text,
+          filePath,
+          language,
+          chunkType,
+          symbolName,
+          startLine,
+          endLine,
+        });
+      }
+    }
+
+    if (chunks.length <= 1 && content.split('\n').length > WINDOW_LINES) {
+      return this.slidingWindowChunk(filePath, content, language);
+    }
+
+    return chunks;
+  }
+
+  private extractSymbolName(node: Parser.SyntaxNode): string | undefined {
+    if (node.type === 'export_statement') {
+      const declaration = node.childForFieldName('declaration');
+      if (declaration) return this.extractSymbolName(declaration);
+      const value = node.childForFieldName('value');
+      if (value?.type === 'identifier') return value.text;
+      return undefined;
+    }
+
+    const nameNode =
+      node.childForFieldName('name') ?? node.childForFieldName('id');
+    if (nameNode) return nameNode.text;
+
+    if (
+      node.type === 'lexical_declaration' ||
+      node.type === 'variable_declaration'
+    ) {
+      const declarator = node.child(1);
+      if (declarator) {
+        const name = declarator.childForFieldName('name');
+        if (name) return name.text;
+      }
+    }
+
+    return undefined;
+  }
+
+  private classifyNode(node: Parser.SyntaxNode): 'function' | 'class' {
+    const type = node.type;
+    if (
+      type === 'class_declaration' ||
+      type === 'class_definition' ||
+      type === 'interface_declaration' ||
+      type === 'enum_declaration'
+    ) {
+      return 'class';
+    }
+    if (type === 'export_statement') {
+      const decl = node.childForFieldName('declaration');
+      if (decl) return this.classifyNode(decl);
+    }
+    return 'function';
   }
 
   // ── File header: imports + exported symbol signatures ───────────────────
@@ -206,7 +374,7 @@ export class ChunkingService {
     }
 
     // If no real blocks found, fall back to sliding window
-    if (chunks.length <= 1 && content.split('\n').length > WINDOW_TOKENS) {
+    if (chunks.length <= 1 && content.split('\n').length > WINDOW_LINES) {
       return this.slidingWindowChunk(filePath, content, language);
     }
 
@@ -224,7 +392,7 @@ export class ChunkingService {
     let i = 0;
 
     while (i < lines.length) {
-      const end = Math.min(i + WINDOW_TOKENS, lines.length);
+      const end = Math.min(i + WINDOW_LINES, lines.length);
       const text = lines.slice(i, end).join('\n').trim();
       if (text) {
         chunks.push({
@@ -236,7 +404,7 @@ export class ChunkingService {
           endLine: end,
         });
       }
-      i += WINDOW_TOKENS - WINDOW_OVERLAP;
+      i += WINDOW_LINES - WINDOW_OVERLAP;
     }
 
     return chunks;

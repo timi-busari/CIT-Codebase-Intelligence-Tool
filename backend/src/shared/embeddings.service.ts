@@ -1,52 +1,86 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import OpenAI from 'openai';
 
 @Injectable()
 export class EmbeddingsService implements OnModuleInit {
   private readonly logger = new Logger(EmbeddingsService.name);
-  private pipeline: any;
+  private client: OpenAI;
+  private model: string;
+  private provider: 'openai' | 'ollama';
   private ready = false;
-  private loadPromise: Promise<void> | null = null;
+
+  constructor(private config: ConfigService) {}
 
   onModuleInit() {
-    // Start loading in the background — don't block server startup
-    this.loadPromise = this.loadModel();
-  }
+    const useOllama =
+      this.config.get<string>('ENABLE_OLLAMA', 'false') === 'true';
 
-  private async loadModel(): Promise<void> {
-    this.logger.log('Loading embedding model (all-MiniLM-L6-v2)...');
-    try {
-      const { pipeline } = await import('@xenova/transformers');
-      this.pipeline = await pipeline(
-        'feature-extraction',
-        'Xenova/all-MiniLM-L6-v2',
+    if (useOllama) {
+      const baseURL = this.config.get<string>(
+        'OLLAMA_BASE_URL',
+        'http://localhost:11434',
       );
-      this.ready = true;
-      this.logger.log('Embedding model loaded successfully.');
-    } catch (err) {
-      this.logger.error('Failed to load embedding model', err);
+      this.model = this.config.get<string>(
+        'OLLAMA_EMBEDDING_MODEL',
+        'nomic-embed-text',
+      );
+      this.provider = 'ollama';
+      this.client = new OpenAI({
+        baseURL: `${baseURL.replace(/\/$/, '')}/v1`,
+        apiKey: 'ollama',
+      });
+    } else {
+      this.model = this.config.get<string>(
+        'OPENAI_EMBEDDING_MODEL',
+        'text-embedding-3-small',
+      );
+      this.provider = 'openai';
+      this.client = new OpenAI({
+        apiKey: this.config.get<string>('OPENAI_API_KEY', ''),
+      });
     }
-  }
 
-  private async waitForReady(): Promise<void> {
-    if (this.ready) return;
-    if (this.loadPromise) await this.loadPromise;
-    if (!this.ready) throw new Error('Embedding model failed to load');
+    this.ready = true;
+    this.logger.log(
+      `Embedding provider: ${this.provider}  model=${this.model}`,
+    );
   }
 
   async embed(text: string): Promise<number[]> {
-    await this.waitForReady();
-    const output = await this.pipeline(text, {
-      pooling: 'mean',
-      normalize: true,
+    if (!this.ready) throw new Error('Embedding service not initialized');
+    const response = await this.client.embeddings.create({
+      model: this.model,
+      input: text,
     });
-    return Array.from(output.data as Float32Array);
+    return response.data[0].embedding;
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    return Promise.all(texts.map((t) => this.embed(t)));
+    if (!this.ready) throw new Error('Embedding service not initialized');
+    if (texts.length === 0) return [];
+
+    // OpenAI supports batching natively; Ollama may need individual calls
+    const batchSize = this.provider === 'openai' ? 100 : 1;
+    const results: number[][] = [];
+
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize);
+      const response = await this.client.embeddings.create({
+        model: this.model,
+        input: batch,
+      });
+      results.push(...response.data.map((d) => d.embedding));
+    }
+
+    return results;
   }
 
   isReady(): boolean {
     return this.ready;
+  }
+
+  getModel(): string {
+    return this.model;
   }
 }
