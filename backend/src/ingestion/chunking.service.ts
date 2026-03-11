@@ -90,6 +90,7 @@ const TOP_LEVEL_NODES: Record<string, Set<string>> = {
 const WINDOW_LINES = 512;
 const WINDOW_OVERLAP = 64;
 const MIN_CHUNK_LINES = 3;
+const MAX_CHUNK_LINES = 300; // Prevent oversized chunks from exceeding embedding token limits
 
 @Injectable()
 export class ChunkingService {
@@ -158,21 +159,43 @@ export class ChunkingService {
         const text = node.text;
         const startLine = node.startPosition.row + 1;
         const endLine = node.endPosition.row + 1;
+        const lineCount = endLine - startLine + 1;
 
-        if (endLine - startLine + 1 < MIN_CHUNK_LINES) continue;
+        if (lineCount < MIN_CHUNK_LINES) continue;
 
-        const symbolName = this.extractSymbolName(node);
-        const chunkType = this.classifyNode(node);
+        // If chunk is too large, split it using sliding window
+        if (lineCount > MAX_CHUNK_LINES) {
+          const lines = text.split('\n');
+          let i = 0;
+          while (i < lines.length) {
+            const end = Math.min(i + WINDOW_LINES, lines.length);
+            const chunkText = lines.slice(i, end).join('\n').trim();
+            if (chunkText) {
+              chunks.push({
+                content: chunkText,
+                filePath,
+                language,
+                chunkType: 'window',
+                startLine: startLine + i,
+                endLine: startLine + end - 1,
+              });
+            }
+            i += WINDOW_LINES - WINDOW_OVERLAP;
+          }
+        } else {
+          const symbolName = this.extractSymbolName(node);
+          const chunkType = this.classifyNode(node);
 
-        chunks.push({
-          content: text,
-          filePath,
-          language,
-          chunkType,
-          symbolName,
-          startLine,
-          endLine,
-        });
+          chunks.push({
+            content: text,
+            filePath,
+            language,
+            chunkType,
+            symbolName,
+            startLine,
+            endLine,
+          });
+        }
       }
     }
 
