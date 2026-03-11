@@ -6,37 +6,54 @@ A full-stack web application that ingests GitHub repositories, auto-generates ar
 
 ```
 CIT/
-├── backend/         NestJS API (port 3001)
+├── backend/         NestJS API (port 4001)
 │   └── src/
 │       ├── ingestion/   Clone, parse & embed repos
-│       ├── query/       Semantic search + OpenAI
+│       ├── query/       Semantic search + LLM
 │       ├── repos/       File tree & content serving
 │       ├── history/     SQLite conversations & bookmarks
 │       ├── archdoc/     Auto-generate architecture docs
 │       └── shared/      Embeddings, ChromaDB, SQLite
-└── frontend/        Next.js 14 App Router (port 3000)
-    └── src/
-        ├── app/         Pages (chat, repos, history, arch)
-        ├── components/  UI components
-        └── lib/         Typed API client
+├── frontend/        Next.js App Router (port 4000)
+│   └── src/
+│       ├── app/         Pages (chat, repos, history, arch)
+│       ├── components/  UI components
+│       └── lib/         Typed API client
+└── docker-compose.yml   One-command setup
 ```
 
 ## Prerequisites
 
 - Node.js ≥ 20
 - [ChromaDB](https://docs.trychroma.com/) running locally (`pip install chromadb && chroma run`)
-- OpenAI API key
+- OpenAI API key **or** [Ollama](https://ollama.com/) running locally
 
-## Quick Start
+## Quick Start (Docker)
+
+The fastest way to get CIT running — one command starts everything:
+
+```bash
+# 1. Copy the example env and edit as needed
+cp .env.example .env
+
+# 2. Launch all services
+docker compose up --build
+```
+
+This starts **ChromaDB**, the **NestJS backend** (port 4001), and the **Next.js frontend** (port 4000).
+
+> **Using Ollama?** Ollama must be running on the host. The Docker setup uses `host.docker.internal` to reach it.
+
+## Quick Start (Manual)
 
 ```bash
 # 1. Install all dependencies
-cd backend && npm install
+cd backend && npm install --legacy-peer-deps
 cd ../frontend && npm install
 cd ..
 
 # 2. Configure environment
-# Edit backend/.env and set OPENAI_API_KEY
+# Edit backend/.env and set OPENAI_API_KEY (or enable Ollama)
 
 # 3. Start ChromaDB (in a separate terminal)
 chroma run --host localhost --port 8000
@@ -45,8 +62,8 @@ chroma run --host localhost --port 8000
 npm run start          # uses concurrently
 
 # Or individually:
-npm run start:backend  # http://localhost:3001
-npm run start:frontend # http://localhost:3000
+npm run start:backend  # http://localhost:4001
+npm run start:frontend # http://localhost:4000
 ```
 
 ## Backend API
@@ -72,8 +89,10 @@ npm run start:frontend # http://localhost:3000
 |-------|-----------|
 | Backend | NestJS (TypeScript) |
 | Vector DB | ChromaDB |
-| Embeddings | @xenova/transformers — all-MiniLM-L6-v2 |
-| LLM | OpenAI GPT API |
+| Embeddings | OpenAI / Ollama (nomic-embed-text) |
+| LLM | OpenAI GPT / Ollama |
+| Code Parsing | tree-sitter (TS, JS, Python) |
 | Persistence | SQLite (better-sqlite3) |
-| Frontend | Next.js 14 App Router |
+| Frontend | Next.js (App Router) |
 | Styling | Vanilla CSS — dark theme |
+| Containerization | Docker Compose |

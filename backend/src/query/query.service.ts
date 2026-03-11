@@ -39,6 +39,7 @@ export class QueryService {
     question: string,
     repoIds?: string[],
     _conversationId?: string,
+    history?: { role: 'user' | 'assistant'; content: string }[],
   ): Promise<QueryResponse> {
     // Resolve repo IDs — filter out any IDs not present in the DB to
     // prevent creating phantom ChromaDB collections (BUG-003)
@@ -190,12 +191,23 @@ export class QueryService {
 
     const userMessage = `Context:\n${contextText}\n\nQuestion: ${question}`;
 
+    // Build messages array with conversation history (last 6 turns max)
+    const MAX_HISTORY_TURNS = 6;
+    const historyMessages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [];
+    if (history?.length) {
+      const trimmed = history.slice(-MAX_HISTORY_TURNS * 2);
+      for (const msg of trimmed) {
+        historyMessages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
     // Call LLM (OpenAI or Ollama)
     let answer = '';
     try {
       answer = await this.llm.chat(
         [
           { role: 'system', content: systemPrompt },
+          ...historyMessages,
           { role: 'user', content: userMessage },
         ],
         { temperature: 0.2, maxTokens: 1500 },

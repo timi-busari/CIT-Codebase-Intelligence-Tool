@@ -152,7 +152,12 @@ export const api = {
   deleteRepo: (id: string) => del(`/api/repos/${id}`),
 
   // Query
-  query: (question: string, repoIds?: string[], conversationId?: string) =>
+  query: (
+    question: string,
+    repoIds?: string[],
+    conversationId?: string,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+  ) =>
     request<{
       answer: string;
       citations: Array<{
@@ -165,7 +170,7 @@ export const api = {
       repoIds: string[];
     }>("/api/query", {
       method: "POST",
-      body: JSON.stringify({ question, repoIds, conversationId }),
+      body: JSON.stringify({ question, repoIds, conversationId, history }),
     }),
 
   // Conversations

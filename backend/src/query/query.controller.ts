@@ -3,8 +3,9 @@ import { QueryService } from './query.service';
 
 export class QueryDto {
   question: string;
-  repoIds?: string[]; // empty = search all repos
+  repoIds?: string[];
   conversationId?: string;
+  history?: { role: 'user' | 'assistant'; content: string }[];
 }
 
 @Controller('api/query')
@@ -18,6 +19,7 @@ export class QueryController {
       dto.question,
       dto.repoIds,
       dto.conversationId,
+      dto.history,
     );
   }
 }
