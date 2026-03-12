@@ -13,6 +13,7 @@ export interface CodeChunk {
   symbolName?: string;
   startLine: number;
   endLine: number;
+  repoId?: string;
 }
 
 const LANG_MAP: Record<string, string> = {

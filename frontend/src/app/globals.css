@@ -403,6 +403,7 @@ img, svg { display: block; }
   overflow: hidden;
   margin: 0.5rem 0;
 }
+
 .code-block-header {
   display: flex;
   align-items: center;
@@ -413,6 +414,74 @@ img, svg { display: block; }
   font-size: 0.75rem;
   color: var(--text-muted);
 }
+
+.code-block-filename {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.code-block-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.language-badge {
+  background: var(--accent-glow);
+  color: var(--accent);
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.code-content {
+  overflow-x: auto;
+}
+
+.code-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.shiki-container {
+  overflow-x: auto;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.shiki-container pre {
+  margin: 0;
+  padding: 1rem;
+  background: transparent !important;
+  overflow-x: auto;
+}
+
+.shiki-container pre code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: inherit;
+}
+
+.shiki-fallback {
+  margin: 0;
+  padding: 1rem;
+  background: #0a0b10;
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+/* Legacy support for highlight.js */
 .code-block pre {
   overflow-x: auto;
   padding: 1rem;
@@ -420,6 +489,149 @@ img, svg { display: block; }
   line-height: 1.6;
 }
 .code-block code { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; }
+
+/* Line highlighting for citations */
+.line-highlight-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--accent-glow);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 1rem;
+}
+
+.highlight-icon {
+  font-size: 1rem;
+}
+
+.highlight-line {
+  background-color: rgba(99, 102, 241, 0.1) !important;
+  border-left: 3px solid var(--accent) !important;
+  padding-left: 0.75rem !important;
+}
+
+/* Citation panel */
+.citation-panel {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 0.75rem;
+}
+
+.citation-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.25rem 0;
+  transition: color 0.15s;
+}
+
+.citation-toggle:hover {
+  color: var(--text-primary);
+}
+
+.citation-count {
+  font-weight: 500;
+}
+
+.citation-arrow {
+  transition: transform 0.2s;
+  font-size: 0.7rem;
+}
+
+.citation-arrow.expanded {
+  transform: rotate(180deg);
+}
+
+.citation-list {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.citation-item {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.citation-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.citation-number {
+  background: var(--accent-glow);
+  color: var(--accent);
+  padding: 0.2rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 0.7rem;
+  min-width: 1.5rem;
+  text-align: center;
+}
+
+.citation-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.citation-link:hover {
+  color: var(--accent);
+}
+
+.citation-file {
+  font-weight: 500;
+}
+
+.citation-lines {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.citation-snippet {
+  background: var(--bg-surface);
+  padding: 0.5rem;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--border);
+}
+
+.citation-snippet code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Breadcrumb styling */
+.breadcrumb-link {
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.breadcrumb-link:hover {
+  color: var(--accent);
+}
 
 /* ── File tree ─────────────────────────────────────────────────────────── */
 .file-tree { font-size: 0.85rem; }

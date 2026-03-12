@@ -1,7 +1,62 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { api, Message } from "@/lib/api";
+import Link from "next/link";
+import { api, Message, Citation } from "@/lib/api";
 import { BookmarkButton } from "./BookmarkButton";
+
+interface CitationPanelProps {
+  citations: Citation[];
+}
+
+function CitationPanel({ citations }: CitationPanelProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!citations || citations.length === 0) return null;
+
+  return (
+    <div className="citation-panel">
+      <button 
+        className="citation-toggle"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="citation-count">
+          {citations.length} source{citations.length > 1 ? 's' : ''}
+        </span>
+        <span className={`citation-arrow ${expanded ? 'expanded' : ''}`}>
+          ▼
+        </span>
+      </button>
+      
+      {expanded && (
+        <div className="citation-list">
+          {citations.map((citation, i) => (
+            <div key={i} className="citation-item">
+              <div className="citation-header">
+                <span className="citation-number">[{i + 1}]</span>
+                <Link 
+                  href={`/repos/${citation.repoId}/file?path=${encodeURIComponent(citation.filePath)}&line=${citation.startLine}`}
+                  className="citation-link"
+                  title="Open file at this location"
+                >
+                  <span className="citation-file">📄 {citation.filePath}</span>
+                  <span className="citation-lines">
+                    Lines {citation.startLine}
+                    {citation.endLine !== citation.startLine && `-${citation.endLine}`}
+                  </span>
+                </Link>
+              </div>
+              {citation.snippet && (
+                <div className="citation-snippet">
+                  <code>{citation.snippet.length > 100 ? `${citation.snippet.slice(0, 100)}...` : citation.snippet}</code>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface ChatPanelProps {
   repoIds?: string[];
@@ -42,27 +97,66 @@ export function ChatPanel({
     setUi((s) => ({ ...s, input: "" }));
     setUi((s) => ({ ...s, loading: true }));
 
+    // Create initial assistant message for streaming
+    const assistantMsgId = (Date.now() + 1).toString();
+    const assistantMsg: Message = {
+      id: assistantMsgId,
+      role: "assistant",
+      content: "",
+      citations: [],
+    };
+    setMessages((prev) => [...prev, assistantMsg]);
+
     try {
       // Send conversation history for context-aware follow-ups
       const historyMsgs = messages.map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
       }));
-      const res = await api.query(q, repoIds, conversationId, historyMsgs);
-      const assistantMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: res.answer,
-        citations: res.citations,
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
+
+      let fullContent = "";
+      let citations: Citation[] = [];
+      
+      for await (const chunk of api.queryStream(q, repoIds, conversationId, historyMsgs)) {
+        if (chunk.error) {
+          throw new Error(chunk.error);
+        }
+        if (chunk.token) {
+          fullContent += chunk.token;
+          // Update the assistant message with streaming content
+          setMessages((prev) => 
+            prev.map((msg) => 
+              msg.id === assistantMsgId 
+                ? { ...msg, content: fullContent + "█" } // Add cursor
+                : msg
+            )
+          );
+        }
+        if (chunk.citations) {
+          citations = chunk.citations;
+        }
+        if (chunk.done) {
+          // Remove cursor and set final content with citations
+          setMessages((prev) => 
+            prev.map((msg) => 
+              msg.id === assistantMsgId 
+                ? { ...msg, content: fullContent, citations }
+                : msg
+            )
+          );
+          break;
+        }
+      }
     } catch (err: unknown) {
-      const errMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-      };
-      setMessages((prev) => [...prev, errMsg]);
+      // Replace the streaming message with error message
+      const errContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
+      setMessages((prev) => 
+        prev.map((msg) => 
+          msg.id === assistantMsgId 
+            ? { ...msg, content: errContent, citations: [] }
+            : msg
+        )
+      );
     } finally {
       setUi((s) => ({ ...s, loading: false }));
     }
@@ -96,17 +190,7 @@ export function ChatPanel({
             <div className="message-bubble">
               <div style={{ whiteSpace: "pre-wrap" }}>{msg.content}</div>
               {msg.citations && msg.citations.length > 0 && (
-                <div className="citations">
-                  {msg.citations.map((c, i) => (
-                    <span
-                      key={i}
-                      className="citation-chip"
-                      title={`Lines ${c.startLine}-${c.endLine}`}
-                    >
-                      [{i + 1}] {c.filePath.split("/").pop()}:{c.startLine}
-                    </span>
-                  ))}
-                </div>
+                <CitationPanel citations={msg.citations} />
               )}
               {msg.role === "assistant" && (
                 <BookmarkButton

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { BullModule } from '@nestjs/bullmq';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { SharedModule } from './shared/shared.module';
@@ -12,6 +13,26 @@ import { ArchDocModule } from './archdoc/archdoc.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // BullMQ with Redis (optional - falls back to in-memory if Redis unavailable)
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: async (configService: ConfigService) => ({
+        connection: {
+          host: configService.get('REDIS_HOST', 'localhost'),
+          port: parseInt(configService.get('REDIS_PORT', '63791')),
+          retryDelayOnFailover: 500,
+          lazyConnect: true,
+          maxRetriesPerRequest: 3,
+          // Gracefully handle Redis connection failures
+          connectTimeout: 5000,
+          commandTimeout: 5000,
+        },
+        defaultJobOptions: {
+          removeOnComplete: 10,
+          removeOnFail: 20,
+        },
+      }),
+    }),
     SharedModule,
     IngestionModule,
     QueryModule,

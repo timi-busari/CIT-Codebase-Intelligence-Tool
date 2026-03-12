@@ -1,32 +1,92 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { codeToHtml } from 'shiki';
 
 interface CodeBlockProps {
   code: string;
   language?: string;
   fileName?: string;
+  highlightLine?: number;
 }
 
-export function CodeBlock({ code, language = 'text', fileName }: CodeBlockProps) {
-  const codeRef = useRef<HTMLElement>(null);
+// Language mapping for shiki
+const SHIKI_LANG_MAP: Record<string, string> = {
+  'typescript': 'typescript',
+  'javascript': 'javascript',
+  'jsx': 'jsx',
+  'tsx': 'tsx',
+  'python': 'python',
+  'go': 'go',
+  'rust': 'rust',
+  'java': 'java',
+  'ruby': 'ruby',
+  'php': 'php',
+  'c': 'c',
+  'cpp': 'cpp',
+  'csharp': 'csharp',
+  'css': 'css',
+  'scss': 'scss',
+  'html': 'html',
+  'json': 'json',
+  'yaml': 'yaml',
+  'toml': 'toml',
+  'sql': 'sql',
+  'bash': 'bash',
+  'shell': 'bash',
+  'markdown': 'markdown',
+  'vue': 'vue',
+  'svelte': 'svelte',
+};
+
+export function CodeBlock({ code, language = 'text', fileName, highlightLine }: CodeBlockProps) {
+  const [highlightedCode, setHighlightedCode] = useState<string>('');
   const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function highlight() {
-      if (!codeRef.current || !code) return;
+      if (!code) {
+        setHighlightedCode('');
+        setLoading(false);
+        return;
+      }
+
       try {
-        const hljs = (await import('highlight.js')).default;
-        if (language && language !== 'text' && hljs.getLanguage(language)) {
-          codeRef.current.innerHTML = hljs.highlight(code, { language }).value;
-        } else {
-          codeRef.current.textContent = code;
-        }
-      } catch {
-        if (codeRef.current) codeRef.current.textContent = code;
+        // Map language to shiki supported language
+        const shikiLang = SHIKI_LANG_MAP[language.toLowerCase()] || 'text';
+        
+        const html = await codeToHtml(code, {
+          lang: shikiLang === 'text' ? 'plaintext' : shikiLang,
+          theme: 'one-dark-pro',
+          transformers: [
+            {
+              pre(node) {
+                // Add line numbers and line highlighting
+                this.addClassToHast(node, 'shiki-code-block');
+              },
+              line(node, line) {
+                // Highlight specific line if specified
+                if (highlightLine && line === highlightLine) {
+                  this.addClassToHast(node, 'highlight-line');
+                }
+              },
+            },
+          ],
+        });
+        
+        setHighlightedCode(html);
+      } catch (error) {
+        // Fallback for unsupported languages
+        console.warn(`Failed to highlight code with language ${language}:`, error);
+        setHighlightedCode(`<pre class="shiki-fallback"><code>${escapeHtml(code)}</code></pre>`);
+      } finally {
+        setLoading(false);
       }
     }
+
+    setLoading(true);
     highlight();
-  }, [code, language]);
+  }, [code, language, highlightLine]);
 
   const copy = async () => {
     await navigator.clipboard.writeText(code);
@@ -34,17 +94,45 @@ export function CodeBlock({ code, language = 'text', fileName }: CodeBlockProps)
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const escapeHtml = (text: string): string => {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  };
+
   return (
     <div className="code-block">
       <div className="code-block-header">
-        <span>{fileName ?? language}</span>
-        <button className="btn btn-ghost btn-sm btn-icon" onClick={copy} title="Copy">
-          {copied ? '✓ Copied' : '📋'}
-        </button>
+        <span className="code-block-filename">
+          {fileName && <span className="file-icon">📄</span>}
+          {fileName || `${language} code`}
+        </span>
+        <div className="code-block-actions">
+          {language && language !== 'text' && (
+            <span className="language-badge">{language}</span>
+          )}
+          <button 
+            className="btn btn-ghost btn-sm btn-icon" 
+            onClick={copy} 
+            title="Copy code"
+          >
+            {copied ? '✓' : '📋'}
+          </button>
+        </div>
       </div>
-      <pre>
-        <code ref={codeRef} className={`language-${language}`}>{code}</code>
-      </pre>
+      <div className="code-content">
+        {loading ? (
+          <div className="code-loading">
+            <span className="spinner" />
+            <span>Loading syntax highlighting...</span>
+          </div>
+        ) : (
+          <div 
+            className="shiki-container"
+            dangerouslySetInnerHTML={{ __html: highlightedCode }}
+          />
+        )}
+      </div>
     </div>
   );
 }

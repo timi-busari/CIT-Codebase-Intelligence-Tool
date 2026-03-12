@@ -170,8 +170,80 @@ export const api = {
       repoIds: string[];
     }>("/api/query", {
       method: "POST",
-      body: JSON.stringify({ question, repoIds, conversationId, history }),
+      body: JSON.stringify({ query: question, repoIds, conversationId, history }),
     }),
+
+  // Streaming Query
+  queryStream: async function* (
+    question: string,
+    repoIds?: string[],
+    conversationId?: string,
+    history?: { role: 'user' | 'assistant'; content: string }[],
+  ) {
+    const apiKey =
+      typeof window !== "undefined"
+        ? (localStorage.getItem("openai_api_key") ?? "")
+        : "";
+    const authHeaders: Record<string, string> = apiKey
+      ? { Authorization: `Bearer ${apiKey}` }
+      : {};
+
+    const response = await fetch(`${API_BASE}/api/query/stream`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders,
+      },
+      body: JSON.stringify({ query: question, repoIds, conversationId, history }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let errorMessage = `${response.status} ${response.statusText}`;
+      try {
+        const json = JSON.parse(text) as { message?: string | string[] };
+        const msg = json.message;
+        errorMessage = Array.isArray(msg)
+          ? msg.join(", ")
+          : (msg ?? errorMessage);
+      } catch {
+        errorMessage = text || errorMessage;
+      }
+      throw new Error(errorMessage);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("No response body");
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.trimStart().startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') return;
+            try {
+              const chunk = JSON.parse(data);
+              yield chunk;
+            } catch {
+              // Skip invalid JSON lines
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  },
 
   // Conversations
   listConversations: (search?: string) =>
