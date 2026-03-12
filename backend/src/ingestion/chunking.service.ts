@@ -87,10 +87,10 @@ const TOP_LEVEL_NODES: Record<string, Set<string>> = {
   ]),
 };
 
-const WINDOW_LINES = 200; // Reduced for smaller embedding models
-const WINDOW_OVERLAP = 30;
+const WINDOW_LINES = 80; // Very small for conservative chunking
+const WINDOW_OVERLAP = 15;
 const MIN_CHUNK_LINES = 3;
-const MAX_CHUNK_LINES = 150; // Smaller limit for conservative chunking
+const MAX_CHUNK_LINES = 60; // Very conservative for token limits
 
 @Injectable()
 export class ChunkingService {
