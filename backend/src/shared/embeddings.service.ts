@@ -66,9 +66,24 @@ export class EmbeddingsService implements OnModuleInit {
 
     for (let i = 0; i < texts.length; i += batchSize) {
       const batch = texts.slice(i, i + batchSize);
+      
+      // Safety check: truncate any texts that are still too long
+      const safeBatch = batch.map((text, idx) => {
+        const chars = text.length;
+        
+        if (chars > 4000) { // Conservative limit - ~1000 tokens max
+          const truncated = text.substring(0, 4000) + '\n...';
+          this.logger.warn(`⚠️ TRUNCATING text ${i + idx}: ${chars} → ${truncated.length} chars`);
+          return truncated;
+        }
+        
+        this.logger.debug(`Embedding text ${i + idx}: ${chars} chars`);
+        return text;
+      });
+      
       const response = await this.client.embeddings.create({
         model: this.model,
-        input: batch,
+        input: safeBatch,
       });
       results.push(...response.data.map((d) => d.embedding));
     }
