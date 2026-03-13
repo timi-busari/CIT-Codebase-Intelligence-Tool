@@ -25,11 +25,11 @@ export function RepoInput({ onIngested }: RepoInputProps) {
       try {
         const s = await api.getJob(state.jobId!);
         setState(prev => ({ ...prev, status: s }));
-        if (s.status === 'done') {
+        if (s.status === 'completed') {
           clearInterval(id);
           setState(prev => ({ ...prev, loading: false, jobId: null, url: '', name: '' }));
           onIngested?.(s.repoId);
-        } else if (s.status === 'error') {
+        } else if (s.status === 'failed') {
           clearInterval(id);
           setState(prev => ({ ...prev, loading: false, error: s.error ?? 'Ingestion failed' }));
         }
@@ -51,13 +51,14 @@ export function RepoInput({ onIngested }: RepoInputProps) {
   };
 
   const progress = state.status?.progress ?? 0;
+  const phase = state.status?.phase ?? state.status?.status ?? '';
   const statusLabel: Record<string, string> = {
     queued: 'Queued…',
     cloning: 'Cloning repository…',
-    parsing: `Parsing files (${state.status?.processedFiles ?? 0}/${state.status?.totalFiles ?? '?'})…`,
-    embedding: 'Generating embeddings…',
-    done: 'Done!',
-    error: 'Error',
+    filtering: 'Scanning files…',
+    chunking: `Parsing files (${state.status?.processedFiles ?? 0}/${state.status?.totalFiles ?? '?'})…`,
+    embedding: `Generating embeddings (${state.status?.processedFiles ?? 0}/${state.status?.totalFiles ?? '?'})…`,
+    complete: 'Done!',
   };
 
   return (
@@ -114,7 +115,7 @@ export function RepoInput({ onIngested }: RepoInputProps) {
       {state.loading && state.status && (
         <div style={{ marginTop: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-            <span>{statusLabel[state.status.status] ?? state.status.status}</span>
+            <span>{statusLabel[phase] ?? phase}</span>
             <span>{progress}%</span>
           </div>
           <div className="progress">

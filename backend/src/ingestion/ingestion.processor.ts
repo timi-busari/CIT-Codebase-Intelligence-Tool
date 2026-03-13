@@ -14,6 +14,7 @@ import {
   IngestionJobData,
   IngestionJobProgress,
 } from './ingestion.queue';
+import { IngestionGateway } from './ingestion.gateway';
 
 const IGNORED_DIRS = new Set([
   '.git',
@@ -81,8 +82,17 @@ export class IngestionProcessor extends WorkerHost {
     private vectorstore: VectorstoreService,
     private db: DatabaseService,
     private chunking: ChunkingService,
+    private gateway: IngestionGateway,
   ) {
     super();
+  }
+
+  private broadcast(job: Job<IngestionJobData>, progress: IngestionJobProgress) {
+    this.gateway.emitProgress({
+      jobId: job.id as string,
+      repoId: job.data.repoId,
+      progress,
+    });
   }
 
   async process(job: Job<IngestionJobData>): Promise<void> {
@@ -91,11 +101,13 @@ export class IngestionProcessor extends WorkerHost {
 
     try {
       // Phase 1: Cloning
-      await job.updateProgress({
+      const cloningProgress: IngestionJobProgress = {
         phase: 'cloning',
         filesProcessed: 0,
         totalFiles: 0,
-      } as IngestionJobProgress);
+      };
+      await job.updateProgress(cloningProgress);
+      this.broadcast(job, cloningProgress);
 
       this.logger.log(`Starting ingestion of ${url} (repoId: ${repoId})`);
 
@@ -114,11 +126,13 @@ export class IngestionProcessor extends WorkerHost {
       this.logger.log(`Cloned repository to ${tempDir}`);
 
       // Phase 2: Filtering and discovery
-      await job.updateProgress({
+      const filteringProgress: IngestionJobProgress = {
         phase: 'filtering',
         filesProcessed: 0,
         totalFiles: 0,
-      } as IngestionJobProgress);
+      };
+      await job.updateProgress(filteringProgress);
+      this.broadcast(job, filteringProgress);
 
       const eligibleFiles = this.getEligibleFiles(tempDir);
       const totalFiles = eligibleFiles.length;
@@ -126,11 +140,13 @@ export class IngestionProcessor extends WorkerHost {
       this.logger.log(`Found ${totalFiles} eligible files for ingestion`);
 
       // Phase 3: Chunking
-      await job.updateProgress({
+      const chunkingStart: IngestionJobProgress = {
         phase: 'chunking',
         filesProcessed: 0,
         totalFiles,
-      } as IngestionJobProgress);
+      };
+      await job.updateProgress(chunkingStart);
+      this.broadcast(job, chunkingStart);
 
       const allChunks: CodeChunk[] = [];
       let processedFiles = 0;
@@ -149,12 +165,14 @@ export class IngestionProcessor extends WorkerHost {
           allChunks.push(...chunks);
 
           processedFiles++;
-          await job.updateProgress({
+          const chunkProgress: IngestionJobProgress = {
             phase: 'chunking',
             filesProcessed: processedFiles,
             totalFiles,
             currentFile: path.relative(tempDir, filePath),
-          } as IngestionJobProgress);
+          };
+          await job.updateProgress(chunkProgress);
+          this.broadcast(job, chunkProgress);
         } catch (error) {
           this.logger.warn(
             `Failed to chunk file ${filePath}: ${error.message}`,
@@ -167,11 +185,13 @@ export class IngestionProcessor extends WorkerHost {
       );
 
       // Phase 4: Embedding
-      await job.updateProgress({
+      const embeddingStart: IngestionJobProgress = {
         phase: 'embedding',
         filesProcessed: 0,
         totalFiles: allChunks.length,
-      } as IngestionJobProgress);
+      };
+      await job.updateProgress(embeddingStart);
+      this.broadcast(job, embeddingStart);
 
       // Batch embeddings for efficiency (process in groups of 50)
       const BATCH_SIZE = 50;
@@ -203,11 +223,13 @@ export class IngestionProcessor extends WorkerHost {
           );
 
           embeddedChunks += batch.length;
-          await job.updateProgress({
+          const embedProgress: IngestionJobProgress = {
             phase: 'embedding',
             filesProcessed: embeddedChunks,
             totalFiles: allChunks.length,
-          } as IngestionJobProgress);
+          };
+          await job.updateProgress(embedProgress);
+          this.broadcast(job, embedProgress);
         } catch (error) {
           this.logger.warn(
             `Failed to embed batch starting at index ${i}: ${error.message}`,
@@ -228,11 +250,14 @@ export class IngestionProcessor extends WorkerHost {
         .run(allChunks.length, eligibleFiles.length, Date.now(), repoId);
 
       // Final progress update
-      await job.updateProgress({
+      const completeProgress: IngestionJobProgress = {
         phase: 'complete',
         filesProcessed: embeddedChunks,
         totalFiles: allChunks.length,
-      } as IngestionJobProgress);
+      };
+      await job.updateProgress(completeProgress);
+      this.broadcast(job, completeProgress);
+      this.gateway.emitComplete(job.id as string, repoId);
 
       this.logger.log(
         `Ingestion completed for ${url} (${allChunks.length} chunks)`,
@@ -242,6 +267,13 @@ export class IngestionProcessor extends WorkerHost {
       fs.rmSync(tempDir, { recursive: true, force: true });
     } catch (error) {
       this.logger.error(`Ingestion failed for ${url}:`, error);
+
+      // Broadcast error to WebSocket clients
+      this.gateway.emitError(
+        job.id as string,
+        repoId,
+        error instanceof Error ? error.message : String(error),
+      );
 
       // Update database status to error
       this.db

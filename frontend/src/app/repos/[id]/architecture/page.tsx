@@ -1,10 +1,11 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Header } from "@/components/Header";
 import { ArchDiagram } from "@/components/ArchDiagram";
-import { api, ArchResult, ApiEndpoint } from "@/lib/api";
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
+import { api, ArchResult, ApiEndpoint, ArchDocHistoryEntry } from "@/lib/api";
 
 export default function ArchitecturePage() {
   const { id } = useParams<{ id: string }>();
@@ -13,14 +14,90 @@ export default function ArchitecturePage() {
     loading: boolean;
     error: string;
   }>({ result: null, loading: false, error: "" });
+  const [history, setHistory] = useState<ArchDocHistoryEntry[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+
+  const loadHistory = async () => {
+    try {
+      const h = await api.getArchDocHistory(id);
+      setHistory(h);
+      return h;
+    } catch {
+      return [];
+    }
+  };
+
+  useEffect(() => {
+    // Load history and auto-display the latest version
+    loadHistory().then(async (h) => {
+      if (h.length > 0) {
+        try {
+          const latest = h[0];
+          const v = await api.getArchDocVersion(id, latest.version);
+          const parsed = parseMarkdown(v.content);
+          setState((s) => (s.result ? s : { ...s, result: { ...parsed, repoId: id } }));
+          setSelectedVersion((prev) => prev ?? latest.version);
+        } catch { /* ignore */ }
+      }
+    });
+  }, [id]);
 
   const generate = async () => {
     setState((s) => ({ ...s, loading: true, error: "" }));
     try {
       const data = await api.generateArchDocs(id);
       setState((s) => ({ ...s, result: data, loading: false }));
+      loadHistory();
     } catch (err: unknown) {
       setState((s) => ({ ...s, error: err instanceof Error ? err.message : String(err), loading: false }));
+    }
+  };
+
+  /** Parse stored markdown back into structured ArchResult fields */
+  const parseMarkdown = (md: string): Omit<ArchResult, "repoId"> => {
+    // Extract summary (between ## Overview and next ##)
+    const summaryMatch = md.match(/## Overview\n([\s\S]*?)(?=\n## )/);
+    const summary = summaryMatch ? summaryMatch[1].trim() : "";
+
+    // Extract mermaid diagram
+    const mermaidMatch = md.match(/```mermaid\n([\s\S]*?)```/);
+    const dependencyGraph = mermaidMatch ? mermaidMatch[1].trim() : "";
+
+    // Extract API endpoints from markdown table
+    const apiEndpoints: ApiEndpoint[] = [];
+    const tableMatch = md.match(/## API Endpoints\n([\s\S]*?)(?=\n## |$)/);
+    if (tableMatch) {
+      const rows = tableMatch[1].trim().split("\n").filter((r) => r.startsWith("|") && !r.includes("---"));
+      for (let i = 1; i < rows.length; i++) {
+        const cells = rows[i].split("|").map((c) => c.trim()).filter(Boolean);
+        if (cells.length >= 3) {
+          apiEndpoints.push({
+            method: cells[0].replace(/`/g, ""),
+            path: cells[1].replace(/`/g, ""),
+            file: cells[2].replace(/`/g, ""),
+          });
+        }
+      }
+    }
+
+    // Extract repo name from title
+    const nameMatch = md.match(/# Architecture: (.+)/);
+    const repoName = nameMatch ? nameMatch[1] : "";
+
+    return { markdown: md, summary, dependencyGraph, apiEndpoints, repoName };
+  };
+
+  const viewVersion = async (version: number) => {
+    try {
+      const v = await api.getArchDocVersion(id, version);
+      const parsed = parseMarkdown(v.content);
+      setState((s) => ({
+        ...s,
+        result: { ...parsed, repoId: id },
+      }));
+      setSelectedVersion(version);
+    } catch (err: unknown) {
+      setState((s) => ({ ...s, error: err instanceof Error ? err.message : String(err) }));
     }
   };
 
@@ -50,6 +127,25 @@ export default function ArchitecturePage() {
         }
       />
       <div className="page">
+        {history.length > 0 && (
+          <section style={{ marginBottom: "1.5rem" }}>
+            <h3 style={{ fontSize: "0.95rem", fontWeight: 600, marginBottom: "0.5rem" }}>
+              Version History
+            </h3>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {history.map((h) => (
+                <button
+                  key={h.version}
+                  className={`btn btn-sm ${selectedVersion === h.version ? "btn-primary" : "btn-secondary"}`}
+                  onClick={() => viewVersion(h.version)}
+                >
+                  v{h.version} — {new Date(h.generatedAt).toLocaleDateString()}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
         {!state.result && !state.loading && (
           <div className="empty-state">
             <div className="empty-state-icon">🏗</div>
@@ -112,16 +208,8 @@ export default function ArchitecturePage() {
               >
                 📋 Overview
               </h2>
-              <div className="card">
-                <p
-                  style={{
-                    fontSize: "0.9rem",
-                    lineHeight: 1.7,
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {state.result.summary}
-                </p>
+              <div className="card" style={{ padding: "1rem" }}>
+                <MarkdownRenderer content={state.result.summary} />
               </div>
             </section>
 
@@ -193,64 +281,6 @@ export default function ArchitecturePage() {
                 </div>
               </section>
             )}
-
-            {/* Folder descriptions */}
-            {state.result.folderDescriptions &&
-              Object.keys(state.result.folderDescriptions).length > 0 && (
-                <section>
-                  <h2
-                    style={{
-                      fontSize: "1.1rem",
-                      fontWeight: 700,
-                      marginBottom: "0.75rem",
-                    }}
-                  >
-                    📁 Folder Structure
-                  </h2>
-                  <div className="card">
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "0.5rem",
-                      }}
-                    >
-                      {Object.entries(state.result.folderDescriptions).map(
-                        ([folder, desc]: [string, string]) => (
-                          <div
-                            key={folder}
-                            style={{
-                              display: "flex",
-                              gap: "0.75rem",
-                              padding: "0.4rem 0",
-                              borderBottom: "1px solid var(--border-subtle)",
-                            }}
-                          >
-                            <code
-                              style={{
-                                fontSize: "0.82rem",
-                                color: "var(--accent)",
-                                minWidth: 160,
-                                flexShrink: 0,
-                              }}
-                            >
-                              {folder}/
-                            </code>
-                            <span
-                              style={{
-                                fontSize: "0.85rem",
-                                color: "var(--text-secondary)",
-                              }}
-                            >
-                              {desc}
-                            </span>
-                          </div>
-                        ),
-                      )}
-                    </div>
-                  </div>
-                </section>
-              )}
 
             {/* Raw Markdown */}
             <section>

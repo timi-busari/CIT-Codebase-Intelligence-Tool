@@ -86,7 +86,7 @@ export default function SettingsPage() {
         <div className="card" style={{ maxWidth: 480, marginTop: '1rem' }}>
           <h2 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem' }}>Backend URL</h2>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            Backend API: <code style={{ color: 'var(--accent)' }}>{process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'}</code>
+            Backend API: <code style={{ color: 'var(--accent)' }}>{process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4001'}</code>
           </p>
         </div>
       </div>

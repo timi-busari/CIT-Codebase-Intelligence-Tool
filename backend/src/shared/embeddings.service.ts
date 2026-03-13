@@ -9,6 +9,7 @@ export class EmbeddingsService implements OnModuleInit {
   private model: string;
   private provider: 'openai' | 'ollama';
   private ready = false;
+  private dimension: number | null = null;
 
   constructor(private config: ConfigService) {}
 
@@ -104,5 +105,12 @@ export class EmbeddingsService implements OnModuleInit {
 
   getModel(): string {
     return this.model;
+  }
+
+  async getDimension(): Promise<number> {
+    if (this.dimension) return this.dimension;
+    const vec = await this.embed('dimension probe');
+    this.dimension = vec.length;
+    return this.dimension;
   }
 }

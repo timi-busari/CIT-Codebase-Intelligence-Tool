@@ -9,7 +9,7 @@ export class HistoryService {
   constructor(private db: DatabaseService) {}
 
   // ── Conversations ─────────────────────────────────────────────────────────
-  listConversations(search?: string): any[] {
+  listConversations(search?: string, repoId?: string): any[] {
     if (search?.trim()) {
       const rows = this.db
         .getDb()
@@ -22,13 +22,17 @@ export class HistoryService {
       `,
         )
         .all(`"${search.replace(/"/g, '""')}"`);
-      return rows.map(this.parseConversation);
+      const parsed = rows.map(this.parseConversation);
+      if (repoId) return parsed.filter((c: any) => c.repo_ids.includes(repoId));
+      return parsed;
     }
     const rows = this.db
       .getDb()
       .prepare(`SELECT * FROM conversations ORDER BY updated_at DESC`)
       .all();
-    return rows.map(this.parseConversation);
+    const parsed = rows.map(this.parseConversation);
+    if (repoId) return parsed.filter((c: any) => c.repo_ids.includes(repoId));
+    return parsed;
   }
 
   createConversation(dto: {
@@ -142,6 +146,19 @@ export class HistoryService {
 
   deleteBookmark(id: string): void {
     this.db.getDb().prepare(`DELETE FROM bookmarks WHERE id=?`).run(id);
+  }
+
+  searchBookmarks(query: string): any[] {
+    const rows = this.db
+      .getDb()
+      .prepare(
+        `SELECT b.* FROM bookmarks b
+         JOIN bookmarks_fts fts ON fts.id = b.id
+         WHERE bookmarks_fts MATCH ?
+         ORDER BY b.created_at DESC`,
+      )
+      .all(`"${query.replace(/"/g, '""')}"`);
+    return rows.map(this.parseBookmark);
   }
 
   private getBookmark(id: string): any {

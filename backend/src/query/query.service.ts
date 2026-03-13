@@ -7,6 +7,7 @@ import {
 } from '../shared/vectorstore.service';
 import { DatabaseService } from '../shared/database.service';
 import { LlmService } from '../shared/llm.service';
+import { RerankService } from '../shared/rerank.service';
 import { toonEncode } from '../shared/toon.helper';
 
 export interface Citation {
@@ -33,6 +34,7 @@ export class QueryService {
     private vectorstore: VectorstoreService,
     private db: DatabaseService,
     private llm: LlmService,
+    private rerank: RerankService,
   ) {}
 
   async query(
@@ -137,9 +139,22 @@ export class QueryService {
       remainder.push(...chunks.slice(floorPerRepo));
     }
     remainder.sort((a, b) => a.distance - b.distance);
-    const topChunks = [...guaranteed, ...remainder]
-      .slice(0, TOTAL_BUDGET)
+    const candidateChunks = [...guaranteed, ...remainder]
+      .slice(0, TOTAL_BUDGET * 2) // keep more for re-ranking
       .sort((a, b) => a.distance - b.distance);
+
+    // Re-rank using Cohere if available, otherwise take top by distance
+    let topChunks: Chunk[];
+    if (this.rerank.isEnabled() && candidateChunks.length > TOTAL_BUDGET) {
+      const rerankedIndices = await this.rerank.rerank(
+        question,
+        candidateChunks.map((c) => c.document),
+        TOTAL_BUDGET,
+      );
+      topChunks = rerankedIndices.map((i) => candidateChunks[i]);
+    } else {
+      topChunks = candidateChunks.slice(0, TOTAL_BUDGET);
+    }
 
     // Encode chunk metadata as TOON to save tokens on the header lines
     const chunkHeaders = await toonEncode(
@@ -347,9 +362,22 @@ export class QueryService {
       remainder.push(...chunks.slice(floorPerRepo));
     }
     remainder.sort((a, b) => a.distance - b.distance);
-    const topChunks = [...guaranteed, ...remainder]
-      .slice(0, TOTAL_BUDGET)
+    const candidateChunks = [...guaranteed, ...remainder]
+      .slice(0, TOTAL_BUDGET * 2)
       .sort((a, b) => a.distance - b.distance);
+
+    // Re-rank using Cohere if available, otherwise take top by distance
+    let topChunks: Chunk[];
+    if (this.rerank.isEnabled() && candidateChunks.length > TOTAL_BUDGET) {
+      const rerankedIndices = await this.rerank.rerank(
+        question,
+        candidateChunks.map((c) => c.document),
+        TOTAL_BUDGET,
+      );
+      topChunks = rerankedIndices.map((i) => candidateChunks[i]);
+    } else {
+      topChunks = candidateChunks.slice(0, TOTAL_BUDGET);
+    }
 
     // Encode chunk metadata as TOON to save tokens
     const chunkHeaders = await toonEncode(

@@ -69,8 +69,11 @@ export class HistoryController {
 
   // ── Conversations ───────────────────────────────────────────────────────
   @Get('conversations')
-  listConversations(@Query('search') search?: string) {
-    return this.historyService.listConversations(search);
+  listConversations(
+    @Query('search') search?: string,
+    @Query('repoId') repoId?: string,
+  ) {
+    return this.historyService.listConversations(search, repoId);
   }
 
   @Post('conversations')
@@ -100,7 +103,10 @@ export class HistoryController {
 
   // ── Bookmarks ───────────────────────────────────────────────────────────
   @Get('bookmarks')
-  listBookmarks(@Query('tag') tag?: string) {
+  listBookmarks(@Query('tag') tag?: string, @Query('search') search?: string) {
+    if (search?.trim()) {
+      return this.historyService.searchBookmarks(search);
+    }
     return this.historyService.listBookmarks(tag);
   }
 

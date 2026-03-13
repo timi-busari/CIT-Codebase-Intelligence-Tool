@@ -41,9 +41,14 @@ const LANG_MAP: Record<string, string> = {
   '.c': 'c',
   '.cpp': 'cpp',
   '.h': 'c',
+  '.hpp': 'cpp',
+  '.cs': 'cs',
   '.kt': 'kotlin',
   '.swift': 'swift',
   '.json': 'json',
+  '.scala': 'scala',
+  '.r': 'r',
+  '.sql': 'sql',
 };
 
 // Tree-sitter grammars for supported languages
@@ -128,8 +133,24 @@ export class ChunkingService {
       }
     }
 
-    // Regex fallback for TS/JS/Python when tree-sitter yields nothing
-    if (['typescript', 'tsx', 'javascript', 'python'].includes(language)) {
+    // Regex-based block splitting for languages with recognisable top-level constructs
+    const blockLangs = [
+      'typescript',
+      'tsx',
+      'javascript',
+      'python',
+      'java',
+      'kotlin',
+      'go',
+      'rust',
+      'c',
+      'cpp',
+      'cs',
+      'php',
+      'ruby',
+      'swift',
+    ];
+    if (blockLangs.includes(language)) {
       const blocks = this.chunkByTopLevelBlocks(filePath, content, language);
       const header = this.extractFileHeader(filePath, content, language);
       return header ? [header, ...blocks] : blocks;
@@ -264,22 +285,61 @@ export class ChunkingService {
       const trimmed = line.trim();
       if (!trimmed) continue;
 
-      if (language === 'python') {
-        if (/^(import |from |class |def |async def )/.test(trimmed))
-          headerLines.push(line);
-      } else {
-        // import / require statements
-        if (
-          /^import\s/.test(trimmed) ||
-          /^(const|let|var)\s+\S+\s*=\s*require\s*\(/.test(trimmed)
-        )
-          headerLines.push(line);
-        // top-level export / class / function signatures (first line only)
-        else if (
-          /^(export\s+|@\w)/.test(trimmed) ||
-          /^(class|function|const|type|interface|enum)\s/.test(trimmed)
-        )
-          headerLines.push(line);
+      switch (language) {
+        case 'python':
+          if (/^(import |from |class |def |async def )/.test(trimmed))
+            headerLines.push(line);
+          break;
+        case 'java':
+        case 'kotlin':
+          if (/^(import |package )/.test(trimmed)) headerLines.push(line);
+          else if (/^(public |private |protected |abstract |@\w)/.test(trimmed))
+            headerLines.push(line);
+          break;
+        case 'go':
+          if (/^(package |import |func |type |var )/.test(trimmed))
+            headerLines.push(line);
+          break;
+        case 'rust':
+          if (/^(use |mod |pub |fn |struct |enum |trait |impl )/.test(trimmed))
+            headerLines.push(line);
+          break;
+        case 'cs':
+          if (/^(using |namespace )/.test(trimmed)) headerLines.push(line);
+          else if (
+            /^(public |private |protected |internal |\[\w)/.test(trimmed)
+          )
+            headerLines.push(line);
+          break;
+        case 'php':
+          if (/^(use |namespace |require|include)/.test(trimmed))
+            headerLines.push(line);
+          else if (/^(class |function |interface |trait )/.test(trimmed))
+            headerLines.push(line);
+          break;
+        case 'ruby':
+          if (/^(require |require_relative |class |module |def )/.test(trimmed))
+            headerLines.push(line);
+          break;
+        case 'c':
+        case 'cpp':
+          if (/^#include\s/.test(trimmed)) headerLines.push(line);
+          else if (/^(class |struct |enum |namespace |typedef )/.test(trimmed))
+            headerLines.push(line);
+          break;
+        default:
+          // JS/TS
+          if (
+            /^import\s/.test(trimmed) ||
+            /^(const|let|var)\s+\S+\s*=\s*require\s*\(/.test(trimmed)
+          )
+            headerLines.push(line);
+          else if (
+            /^(export\s+|@\w)/.test(trimmed) ||
+            /^(class|function|const|type|interface|enum)\s/.test(trimmed)
+          )
+            headerLines.push(line);
+          break;
       }
     }
 
@@ -343,7 +403,7 @@ export class ChunkingService {
       : this.slidingWindowChunk(filePath, content, 'markdown');
   }
 
-  // ── JS/TS/Python: naive top-level block split ─────────────────────────────
+  // ── Top-level block split (multi-language) ────────────────────────────────
   private chunkByTopLevelBlocks(
     filePath: string,
     content: string,
@@ -355,12 +415,47 @@ export class ChunkingService {
     let startLine = 1;
 
     const isBlockStart = (line: string): boolean => {
-      if (language === 'python') {
-        return /^(def |class |async def )\S/.test(line);
+      const trimmed = line.trimStart();
+      switch (language) {
+        case 'python':
+          return /^(def |class |async def )\S/.test(trimmed);
+        case 'java':
+        case 'kotlin':
+          return /^(public |private |protected |static |abstract |final |open |data |sealed )*(class |interface |enum |fun |object |@\w)/.test(
+            trimmed,
+          );
+        case 'go':
+          return /^(func |type |var |const )/.test(trimmed);
+        case 'rust':
+          return /^(pub\s+)?(fn |struct |enum |impl |trait |mod |type |const |static )/.test(
+            trimmed,
+          );
+        case 'c':
+        case 'cpp':
+          return (
+            /^(\w+\s+)+\w+\s*\(/.test(trimmed) &&
+            !/^(if|for|while|switch|return)\b/.test(trimmed)
+          );
+        case 'cs':
+          return /^(public |private |protected |internal |static |abstract |sealed |partial )*(class |interface |enum |struct |void |async |\w+\s+\w+\s*\()/.test(
+            trimmed,
+          );
+        case 'php':
+          return /^(public |private |protected |static |abstract |final )*(function |class |interface |trait )/.test(
+            trimmed,
+          );
+        case 'ruby':
+          return /^(def |class |module )/.test(trimmed);
+        case 'swift':
+          return /^(public |private |internal |open |fileprivate )*(func |class |struct |enum |protocol |extension )/.test(
+            trimmed,
+          );
+        default:
+          // JS/TS fallback
+          return /^(export\s+)?(default\s+)?(async\s+)?(function|class|const\s+\w+\s*=\s*(async\s+)?\(|const\s+\w+\s*=\s*(async\s+)?function)\b/.test(
+            trimmed,
+          );
       }
-      return /^(export\s+)?(default\s+)?(async\s+)?(function|class|const\s+\w+\s*=\s*(async\s+)?\(|const\s+\w+\s*=\s*(async\s+)?function)\b/.test(
-        line.trimStart(),
-      );
     };
 
     for (let i = 0; i < lines.length; i++) {

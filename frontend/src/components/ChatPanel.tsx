@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { api, Message, Citation } from "@/lib/api";
 import { BookmarkButton } from "./BookmarkButton";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 
 interface CitationPanelProps {
   citations: Citation[];
@@ -80,9 +81,13 @@ export function ChatPanel({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Only persist messages after streaming completes (loading → false)
+  // to avoid saving empty/partial assistant responses during streaming.
   useEffect(() => {
-    onMessagesChange?.(messages);
-  }, [messages, onMessagesChange]);
+    if (!ui.loading) {
+      onMessagesChange?.(messages);
+    }
+  }, [messages, ui.loading, onMessagesChange]);
 
   const send = async () => {
     const q = ui.input.trim();
@@ -169,6 +174,22 @@ export function ChatPanel({
     }
   };
 
+  const handleCitationClick = (messageId: string, index: number) => {
+    const bubble = document.querySelector(`[data-msg-id="${CSS.escape(messageId)}"]`);
+    if (!bubble) return;
+    const toggle = bubble.querySelector('.citation-toggle') as HTMLButtonElement;
+    const list = bubble.querySelector('.citation-list');
+    if (toggle && !list) toggle.click();
+    setTimeout(() => {
+      const items = bubble.querySelectorAll('.citation-item');
+      if (items[index]) {
+        items[index].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        items[index].classList.add('citation-highlight');
+        setTimeout(() => items[index].classList.remove('citation-highlight'), 2000);
+      }
+    }, 150);
+  };
+
   return (
     <div className="chat-layout">
       {/* Messages */}
@@ -187,8 +208,16 @@ export function ChatPanel({
             <div className="message-avatar">
               {msg.role === "user" ? "👤" : "🤖"}
             </div>
-            <div className="message-bubble">
-              <div style={{ whiteSpace: "pre-wrap" }}>{msg.content}</div>
+            <div className="message-bubble" data-msg-id={msg.id}>
+              {msg.role === "assistant" ? (
+                <MarkdownRenderer
+                  content={msg.content}
+                  citations={msg.citations}
+                  onCitationClick={(idx) => handleCitationClick(msg.id, idx)}
+                />
+              ) : (
+                <div style={{ whiteSpace: "pre-wrap" }}>{msg.content}</div>
+              )}
               {msg.citations && msg.citations.length > 0 && (
                 <CitationPanel citations={msg.citations} />
               )}
