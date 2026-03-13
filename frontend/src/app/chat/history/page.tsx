@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Header } from '@/components/Header';
 import { ConversationList } from '@/components/ConversationList';
+import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 import { api, Conversation, Bookmark } from '@/lib/api';
 
 export default function HistoryPage() {
@@ -89,7 +90,7 @@ export default function HistoryPage() {
                   <strong style={{ fontSize: '0.9rem' }}>{bm.question}</strong>
                   <button className="btn btn-ghost btn-sm btn-icon" onClick={() => deleteBookmark(bm.id)}>🗑️</button>
                 </div>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{bm.answer.slice(0, 300)}{bm.answer.length > 300 ? '…' : ''}</p>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}><MarkdownRenderer content={bm.answer} /></div>
                 {bm.tags?.length > 0 && (
                   <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
                     {bm.tags.map((t: string, i: number) => (

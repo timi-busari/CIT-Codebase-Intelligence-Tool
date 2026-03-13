@@ -48,14 +48,10 @@ export class ReposService {
   async getFileTree(repoId: string): Promise<FileNode> {
     this.getRepo(repoId); // validates existence
     // Derive file tree from ChromaDB chunk metadata
-    const results = await this.vectorstore.query(
-      [repoId],
-      new Array(384).fill(0),
-      10000,
-    );
+    const result = await this.vectorstore.getAll(repoId);
     const filePaths = new Set<string>();
-    for (const r of results) {
-      r.metadatas.forEach((m) => filePaths.add(m.filePath));
+    if (result) {
+      result.metadatas.forEach((m) => filePaths.add(m.filePath));
     }
     return this.buildTree(repoId, Array.from(filePaths));
   }
@@ -65,19 +61,15 @@ export class ReposService {
     filePath: string,
   ): Promise<{ content: string; language: string }> {
     this.getRepo(repoId);
-    const results = await this.vectorstore.query(
-      [repoId],
-      new Array(384).fill(0),
-      10000,
-    );
+    const result = await this.vectorstore.getAll(repoId);
     const chunks: Array<{ startLine: number; content: string }> = [];
     let language = 'text';
-    for (const r of results) {
-      r.metadatas.forEach((m, i) => {
+    if (result) {
+      result.metadatas.forEach((m, i) => {
         if (m.filePath === filePath) {
           chunks.push({
             startLine: (m.startLine as number) ?? 0,
-            content: r.documents[i],
+            content: result.documents[i],
           });
           language = m.language as string;
         }

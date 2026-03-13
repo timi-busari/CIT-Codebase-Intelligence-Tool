@@ -140,4 +140,43 @@ export class VectorstoreService {
       return 0;
     }
   }
+
+  /** Retrieve all chunks for a repo without needing an embedding vector. */
+  async getAll(
+    repoId: string,
+  ): Promise<{ ids: string[]; documents: string[]; metadatas: ChunkMetadata[] } | null> {
+    try {
+      const collection = await this.getOrCreateCollection(repoId);
+      const count = await collection.count();
+      if (count === 0) return null;
+      const res = await collection.get();
+      return {
+        ids: res.ids,
+        documents: res.documents as string[],
+        metadatas: res.metadatas as unknown as ChunkMetadata[],
+      };
+    } catch (err) {
+      this.logger.warn(`getAll failed for repo ${repoId}: ${err.message}`);
+      return null;
+    }
+  }
+
+  /** Delete chunks matching specific file paths from a repo collection */
+  async deleteByFilePaths(
+    repoId: string,
+    filePaths: string[],
+  ): Promise<void> {
+    if (filePaths.length === 0) return;
+    try {
+      const collection = await this.getOrCreateCollection(repoId);
+      // ChromaDB supports $in filter on metadata
+      await collection.delete({
+        where: { filePath: { $in: filePaths } } as any,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Failed to delete chunks by file paths for repo ${repoId}: ${err.message}`,
+      );
+    }
+  }
 }

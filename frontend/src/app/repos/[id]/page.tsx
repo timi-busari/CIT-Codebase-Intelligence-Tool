@@ -87,6 +87,9 @@ export default function RepoPage() {
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <Link href="/chat" className="btn btn-secondary btn-sm">💬 Chat</Link>
             <Link href={`/repos/${id}/architecture`} className="btn btn-primary btn-sm">🏗 Architecture</Link>
+            <Link href={`/repos/${id}/onboarding`} className="btn btn-secondary btn-sm">📖 Onboarding</Link>
+            <Link href={`/repos/${id}/health`} className="btn btn-secondary btn-sm">🩺 Health</Link>
+            <Link href={`/repos/${id}/pr-analysis`} className="btn btn-secondary btn-sm">🔍 PR Analysis</Link>
           </div>
         }
       />

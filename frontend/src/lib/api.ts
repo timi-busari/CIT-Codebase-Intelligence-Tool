@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // BUG-009: forward saved API key on every request
@@ -108,8 +108,56 @@ export interface ArchResult {
   summary: string;
   dependencyGraph: string;
   apiEndpoints: ApiEndpoint[];
-  folderDescriptions: Record<string, string>;
   markdown: string;
+}
+
+export interface ArchDocVersion {
+  version: number;
+  content: string;
+  generatedAt: number;
+}
+
+export interface ArchDocHistoryEntry {
+  version: number;
+  generatedAt: number;
+}
+
+export interface OnboardingResult {
+  repoId: string;
+  markdown: string;
+  version: number;
+}
+
+export interface PrAnalysis {
+  id: string;
+  repoId: string;
+  prNumber: number;
+  prUrl: string;
+  summary: string;
+  filesChanged: string[];
+  risks: string[];
+  createdAt: number;
+}
+
+export interface FileMetric {
+  filePath: string;
+  loc: number;
+  functionCount: number;
+  avgFunctionLength: number;
+  cyclomaticComplexity: number;
+  todoCount: number;
+}
+
+export interface HealthReport {
+  repoId: string;
+  totalFiles: number;
+  totalLoc: number;
+  avgComplexity: number;
+  healthScore: number;
+  topComplexFiles: FileMetric[];
+  largestFiles: FileMetric[];
+  todoHotspots: FileMetric[];
+  locDistribution: { bracket: string; count: number }[];
 }
 
 export interface JobStatus {
@@ -119,6 +167,7 @@ export interface JobStatus {
   progress: number;
   totalFiles: number;
   processedFiles: number;
+  phase?: string;
   error?: string;
 }
 
@@ -138,6 +187,7 @@ export const api = {
       progress: number;
       totalFiles: number;
       processedFiles: number;
+      phase?: string;
       error?: string;
     }>(`/api/ingest/status/${jobId}`),
 
@@ -289,7 +339,48 @@ export const api = {
     }),
   deleteBookmark: (id: string) => del(`/api/bookmarks/${id}`),
 
+  // Bookmarks search
+  searchBookmarks: (query: string) =>
+    request<Bookmark[]>(`/api/bookmarks?search=${encodeURIComponent(query)}`),
+
+  // Conversations by repo
+  listConversationsByRepo: (repoId: string) =>
+    request<Conversation[]>(`/api/conversations?repoId=${encodeURIComponent(repoId)}`),
+
   // Architecture
   generateArchDocs: (repoId: string) =>
     request<ArchResult>(`/api/repos/${repoId}/architecture`, { method: "POST" }),
+  getArchDocHistory: (repoId: string) =>
+    request<ArchDocHistoryEntry[]>(`/api/repos/${repoId}/architecture/history`),
+  getArchDocVersion: (repoId: string, version: number) =>
+    request<ArchDocVersion>(`/api/repos/${repoId}/architecture/versions/${version}`),
+
+  // Onboarding
+  generateOnboarding: (repoId: string) =>
+    request<OnboardingResult>(`/api/repos/${repoId}/onboarding`, { method: "POST" }),
+  getOnboardingHistory: (repoId: string) =>
+    request<ArchDocHistoryEntry[]>(`/api/repos/${repoId}/onboarding/history`),
+  getOnboardingVersion: (repoId: string, version: number) =>
+    request<ArchDocVersion>(`/api/repos/${repoId}/onboarding/versions/${version}`),
+
+  // PR Analysis
+  analyzePr: (data: { repoId: string; repoUrl: string; prNumber: number; githubToken?: string }) =>
+    request<PrAnalysis>("/api/pr-analysis", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listPrAnalyses: (repoId: string) =>
+    request<PrAnalysis[]>(`/api/repos/${repoId}/pr-analyses`),
+  getPrAnalysis: (id: string) =>
+    request<PrAnalysis>(`/api/pr-analysis/${id}`),
+
+  // Code Health
+  computeHealth: (repoId: string) =>
+    request<{ message: string }>(`/api/repos/${repoId}/health/compute`, { method: "POST" }),
+  getHealth: (repoId: string) =>
+    request<HealthReport>(`/api/repos/${repoId}/health`),
+
+  // Webhooks
+  setupWebhook: (repoId: string) =>
+    request<{ secret: string; webhookUrl: string }>(`/api/repos/${repoId}/webhook/setup`, { method: "POST" }),
 };

@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
 import { DatabaseService } from '../shared/database.service';
 import { VectorstoreService } from '../shared/vectorstore.service';
 import { LlmService } from '../shared/llm.service';
@@ -11,7 +12,6 @@ export interface ArchDocResult {
   summary: string;
   dependencyGraph: string; // Mermaid LR diagram
   apiEndpoints: ApiEndpoint[];
-  folderDescriptions: Record<string, string>;
   markdown: string;
 }
 
@@ -41,25 +41,20 @@ export class ArchDocService {
     if (!repo) throw new NotFoundException(`Repo ${repoId} not found`);
 
     // Fetch all chunks from vectorstore
-    const results = await this.vectorstore.query(
-      [repoId],
-      new Array(384).fill(0),
-      10000,
-    );
-    const chunks = results.flatMap((r) =>
-      r.ids.map((id, i) => ({
-        id,
-        content: r.documents[i],
-        meta: r.metadatas[i],
-      })),
-    );
+    const allData = await this.vectorstore.getAll(repoId);
+    const chunks = allData
+      ? allData.ids.map((id, i) => ({
+          id,
+          content: allData.documents[i],
+          meta: allData.metadatas[i],
+        }))
+      : [];
 
-    // Build file → content map (first chunk per file)
+    // Build file → content map (concatenate all chunks per file)
     const fileMap = new Map<string, string>();
     for (const c of chunks) {
-      if (!fileMap.has(c.meta.filePath)) {
-        fileMap.set(c.meta.filePath, c.content);
-      }
+      const existing = fileMap.get(c.meta.filePath) ?? '';
+      fileMap.set(c.meta.filePath, existing + c.content);
     }
 
     // 1. Dependency graph
@@ -68,52 +63,155 @@ export class ArchDocService {
     // 2. API endpoints
     const apiEndpoints = this.extractApiEndpoints(fileMap);
 
-    // 3. Folder descriptions
-    const folderDescriptions = this.buildFolderDescriptions(fileMap);
-
-    // 4. LLM summary
+    // 3. LLM summary
     const summary = await this.generateSummary(
       repo.name,
       fileMap,
       apiEndpoints,
-      folderDescriptions,
     );
 
-    // 5. Assemble Markdown
+    // 4. Assemble Markdown
     const markdown = this.assembleMarkdown(
       repo.name,
       summary,
       dependencyGraph,
       apiEndpoints,
-      folderDescriptions,
     );
 
-    return {
+    const result: ArchDocResult = {
       repoId,
       repoName: repo.name,
       summary,
       dependencyGraph,
       apiEndpoints,
-      folderDescriptions,
       markdown,
     };
+
+    // Persist versioned arch doc
+    const lastVersion = this.db
+      .getDb()
+      .prepare(
+        `SELECT COALESCE(MAX(version), 0) AS v FROM arch_docs WHERE repo_id = ?`,
+      )
+      .get(repoId) as any;
+    const nextVersion = (lastVersion?.v ?? 0) + 1;
+    this.db
+      .getDb()
+      .prepare(
+        `INSERT INTO arch_docs (id, repo_id, content, version, generated_at) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(randomUUID(), repoId, markdown, nextVersion, Date.now());
+
+    return result;
+  }
+
+  /** Get version history (metadata only) for a repo's architecture docs */
+  getHistory(repoId: string): { version: number; generatedAt: number }[] {
+    return this.db
+      .getDb()
+      .prepare(
+        `SELECT version, generated_at as generatedAt FROM arch_docs WHERE repo_id = ? ORDER BY version DESC`,
+      )
+      .all(repoId) as any[];
+  }
+
+  /** Get a specific version of an architecture doc */
+  getVersion(
+    repoId: string,
+    version: number,
+  ): { version: number; content: string; generatedAt: number } {
+    const row = this.db
+      .getDb()
+      .prepare(
+        `SELECT version, content, generated_at as generatedAt FROM arch_docs WHERE repo_id = ? AND version = ?`,
+      )
+      .get(repoId, version) as any;
+    if (!row)
+      throw new NotFoundException(
+        `Arch doc version ${version} not found for repo ${repoId}`,
+      );
+    return row;
   }
 
   // ── Dependency graph ──────────────────────────────────────────────────────
   private buildDependencyGraph(fileMap: Map<string, string>): string {
     const edges: string[] = [];
 
+    // Language-specific import patterns
+    const importPatterns: {
+      ext: string[];
+      regex: RegExp;
+      relativeOnly: boolean;
+    }[] = [
+      // JS / TS: import ... from '...', require('...')
+      {
+        ext: ['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs'],
+        regex: /(?:import|require)\s*(?:.*?\s+from\s*)?['"]([^'"]+)['"]/g,
+        relativeOnly: true,
+      },
+      // Python: import x, from x import y
+      {
+        ext: ['.py'],
+        regex: /^\s*(?:from\s+(\S+)\s+import|import\s+(\S+))/gm,
+        relativeOnly: false,
+      },
+      // Java / Kotlin: import com.example.package
+      {
+        ext: ['.java', '.kt', '.kts'],
+        regex: /^\s*import\s+([\w.]+)/gm,
+        relativeOnly: false,
+      },
+      // Go: import "path" or "path"
+      { ext: ['.go'], regex: /"([^"]+)"/g, relativeOnly: false },
+      // Rust: use crate::module, mod module
+      {
+        ext: ['.rs'],
+        regex: /(?:use\s+(?:crate|super|self)::([\w:]+)|mod\s+(\w+))/g,
+        relativeOnly: false,
+      },
+      // C#: using Namespace.Sub
+      {
+        ext: ['.cs'],
+        regex: /^\s*using\s+([\w.]+)\s*;/gm,
+        relativeOnly: false,
+      },
+      // PHP: use Namespace\Class
+      {
+        ext: ['.php'],
+        regex:
+          /(?:use\s+([\w\\]+)|require(?:_once)?\s+['"]([^'"]+)['"]|include(?:_once)?\s+['"]([^'"]+)['"])/g,
+        relativeOnly: false,
+      },
+      // Ruby: require 'file', require_relative 'file'
+      {
+        ext: ['.rb'],
+        regex: /(?:require(?:_relative)?\s+['"]([^'"]+)['"])/g,
+        relativeOnly: false,
+      },
+    ];
+
     for (const [filePath, content] of fileMap) {
-      const importRegex =
-        /(?:import|require)\s*(?:.*?\s+from\s*)?['"]([^'"]+)['"]/g;
-      let match: RegExpExecArray | null;
-      while ((match = importRegex.exec(content)) !== null) {
-        const imported = match[1];
-        // Only include relative imports
-        if (!imported.startsWith('.')) continue;
-        const sourceNode = this.nodeLabel(filePath);
-        const targetNode = this.nodeLabel(imported);
-        edges.push(`  ${sourceNode} --> ${targetNode}`);
+      const lower = filePath.toLowerCase();
+      for (const pattern of importPatterns) {
+        if (!pattern.ext.some((e) => lower.endsWith(e))) continue;
+        const regex = new RegExp(pattern.regex.source, pattern.regex.flags);
+        let match: RegExpExecArray | null;
+        while ((match = regex.exec(content)) !== null) {
+          const imported = match[1] || match[2] || match[3];
+          if (!imported) continue;
+          // For JS/TS, only include relative imports
+          if (pattern.relativeOnly && !imported.startsWith('.')) continue;
+          // For other langs, skip standard-library / very common imports
+          if (
+            !pattern.relativeOnly &&
+            this.isStdLibImport(imported, pattern.ext[0])
+          )
+            continue;
+          const sourceNode = this.nodeLabel(filePath);
+          const targetNode = this.nodeLabel(imported);
+          edges.push(`  ${sourceNode} --> ${targetNode}`);
+        }
+        break; // matched extension, skip remaining patterns
       }
     }
 
@@ -122,6 +220,51 @@ export class ArchDocService {
       return `graph LR\n  note["No internal imports found"]`;
     }
     return `graph LR\n${uniqueEdges.join('\n')}`;
+  }
+
+  private isStdLibImport(imported: string, ext: string): boolean {
+    switch (ext) {
+      case '.py':
+        return [
+          'os',
+          'sys',
+          'json',
+          'typing',
+          're',
+          'datetime',
+          'logging',
+          'collections',
+          'abc',
+          'functools',
+          'pathlib',
+          'io',
+          'math',
+          'unittest',
+          'dataclasses',
+          'enum',
+          'copy',
+          'uuid',
+          'hashlib',
+          'time',
+          'traceback',
+          'contextlib',
+          'itertools',
+          'operator',
+          '__future__',
+        ].includes(imported.split('.')[0]);
+      case '.java':
+        return (
+          imported.startsWith('java.') ||
+          imported.startsWith('javax.') ||
+          imported.startsWith('sun.')
+        );
+      case '.go':
+        return !imported.includes('.'); // Go stdlib has no dots (e.g. "fmt", "net/http")
+      case '.cs':
+        return imported.startsWith('System.');
+      default:
+        return false;
+    }
   }
 
   private nodeLabel(p: string): string {
@@ -135,40 +278,198 @@ export class ArchDocService {
   // ── API endpoint extraction ───────────────────────────────────────────────
   private extractApiEndpoints(fileMap: Map<string, string>): ApiEndpoint[] {
     const endpoints: ApiEndpoint[] = [];
-    // Match @Get(), @Get('path'), @Get("path"), @Get(`path`) — argument is optional
-    const decoratorRegex =
-      /@(Get|Post|Put|Patch|Delete|Head|Options)\s*\(\s*(?:['`"]([^'`"]*?)['`"])?\s*\)/g;
-    // Match @Controller(), @Controller('prefix'), etc. — argument is optional
-    const controllerRegex = /@Controller\s*\(\s*(?:['`"]([^'`"]*?)['`"])?\s*\)/;
 
     for (const [filePath, content] of fileMap) {
-      if (!filePath.endsWith('.ts') && !filePath.endsWith('.js')) continue;
-      const controllerMatch = controllerRegex.exec(content);
-      // controllerMatch[1] is undefined when @Controller() has no argument → base is ''
-      const baseRoute = controllerMatch ? `/${controllerMatch[1] ?? ''}` : '';
+      const lower = filePath.toLowerCase();
 
-      let match: RegExpExecArray | null;
-      while ((match = decoratorRegex.exec(content)) !== null) {
-        endpoints.push({
-          method: match[1].toUpperCase(),
-          // match[2] is undefined when @Get() has no argument → path is just the base
-          path: `${baseRoute}/${match[2] ?? ''}`.replace(/\/+/g, '/') || '/',
-          file: filePath,
-        });
+      // ── JS / TS: NestJS decorators ──
+      if (lower.endsWith('.ts') || lower.endsWith('.js')) {
+        const decoratorRegex =
+          /@(Get|Post|Put|Patch|Delete|Head|Options)\s*\(\s*(?:['`"]([^'`"]*?)['`"])?\s*\)/g;
+        const controllerRegex =
+          /@Controller\s*\(\s*(?:['`"]([^'`"]*?)['`"])?\s*\)/;
+        const controllerMatch = controllerRegex.exec(content);
+        const baseRoute = controllerMatch ? `/${controllerMatch[1] ?? ''}` : '';
+        let match: RegExpExecArray | null;
+        while ((match = decoratorRegex.exec(content)) !== null) {
+          endpoints.push({
+            method: match[1].toUpperCase(),
+            path: `${baseRoute}/${match[2] ?? ''}`.replace(/\/+/g, '/') || '/',
+            file: filePath,
+          });
+        }
+
+        // Express-style: app.get('/path', ...) or router.get('/path', ...)
+        const expressRegex =
+          /(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/g;
+        while ((match = expressRegex.exec(content)) !== null) {
+          endpoints.push({
+            method: match[1].toUpperCase(),
+            path: match[2],
+            file: filePath,
+          });
+        }
+
+        // Next.js App Router
+        if (filePath.includes('/route.') || filePath.includes('\\route.')) {
+          const routeRegex =
+            /export\s+async\s+function\s+(GET|POST|PUT|PATCH|DELETE)\s*\(/g;
+          while ((match = routeRegex.exec(content)) !== null) {
+            const routePath = filePath
+              .replace(/.*app|.*pages/, '')
+              .replace(/\/route\.(ts|js)$/, '')
+              .replace(/\\/g, '/');
+            endpoints.push({
+              method: match[1],
+              path: routePath || '/',
+              file: filePath,
+            });
+          }
+        }
       }
 
-      // Next.js App Router detection
-      if (filePath.includes('/route.') || filePath.includes('\\route.')) {
-        const routeRegex =
-          /export\s+async\s+function\s+(GET|POST|PUT|PATCH|DELETE)\s*\(/g;
-        while ((match = routeRegex.exec(content)) !== null) {
-          const routePath = filePath
-            .replace(/.*app|.*pages/, '')
-            .replace(/\/route\.(ts|js)$/, '')
-            .replace(/\\/g, '/');
+      // ── Java / Kotlin: Spring Boot annotations ──
+      if (lower.endsWith('.java') || lower.endsWith('.kt')) {
+        const mappingRegex =
+          /@(GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|RequestMapping)\s*\(\s*(?:value\s*=\s*)?(?:['"]([^'"]*?)['"])?/g;
+        const classMapping =
+          /@RequestMapping\s*\(\s*(?:value\s*=\s*)?['"]([^'"]*?)['"]/;
+        const classMatch = classMapping.exec(content);
+        const basePath = classMatch ? classMatch[1] : '';
+        let match: RegExpExecArray | null;
+        while ((match = mappingRegex.exec(content)) !== null) {
+          const decorator = match[1];
+          const method =
+            decorator === 'RequestMapping'
+              ? 'GET'
+              : decorator.replace('Mapping', '').toUpperCase();
+          const path =
+            `${basePath}/${match[2] ?? ''}`.replace(/\/+/g, '/') || '/';
+          endpoints.push({ method, path, file: filePath });
+        }
+
+        // JAX-RS: @GET @Path("/...") or @Path on class
+        const jaxRsRegex = /@(GET|POST|PUT|PATCH|DELETE)\b/g;
+        const pathRegex = /@Path\s*\(\s*['"]([^'"]*?)['"]/;
+        const jaxClassPath = pathRegex.exec(content);
+        const jaxBase = jaxClassPath ? jaxClassPath[1] : '';
+        while ((match = jaxRsRegex.exec(content)) !== null) {
           endpoints.push({
             method: match[1],
-            path: routePath || '/',
+            path: jaxBase || '/',
+            file: filePath,
+          });
+        }
+      }
+
+      // ── Python: Flask / FastAPI / Django ──
+      if (lower.endsWith('.py')) {
+        // Flask: @app.route('/path', methods=['GET']) or @app.get('/path')
+        // FastAPI: @app.get('/path') / @router.get('/path')
+        const pyRouteRegex =
+          /(?:@\w+\.(?:route\s*\(\s*['"]([^'"]+)['"]\s*,\s*methods\s*=\s*\[([^\]]+)\])|@\w+\.(get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"])/g;
+        let match: RegExpExecArray | null;
+        while ((match = pyRouteRegex.exec(content)) !== null) {
+          if (match[1]) {
+            // @app.route('/path', methods=['GET', 'POST'])
+            const methods = match[2]
+              .replace(/['"]\s*/g, '')
+              .split(',')
+              .map((m) => m.trim().toUpperCase());
+            for (const m of methods) {
+              endpoints.push({ method: m, path: match[1], file: filePath });
+            }
+          } else if (match[3]) {
+            // @app.get('/path')
+            endpoints.push({
+              method: match[3].toUpperCase(),
+              path: match[4],
+              file: filePath,
+            });
+          }
+        }
+
+        // Django urls.py: path('route/', view)
+        const djangoRegex = /path\s*\(\s*['"]([^'"]+)['"]/g;
+        if (lower.includes('urls')) {
+          while ((match = djangoRegex.exec(content)) !== null) {
+            endpoints.push({
+              method: 'ANY',
+              path: `/${match[1]}`,
+              file: filePath,
+            });
+          }
+        }
+      }
+
+      // ── Go: net/http, Gin, Echo, Chi ──
+      if (lower.endsWith('.go')) {
+        // http.HandleFunc / mux.HandleFunc
+        const goHttpRegex = /(?:HandleFunc|Handle)\s*\(\s*"([^"]+)"/g;
+        let match: RegExpExecArray | null;
+        while ((match = goHttpRegex.exec(content)) !== null) {
+          endpoints.push({ method: 'ANY', path: match[1], file: filePath });
+        }
+        // Gin / Echo: r.GET("/path", ...) or e.GET("/path", ...)
+        const ginRegex = /\.(GET|POST|PUT|PATCH|DELETE)\s*\(\s*"([^"]+)"/g;
+        while ((match = ginRegex.exec(content)) !== null) {
+          endpoints.push({ method: match[1], path: match[2], file: filePath });
+        }
+      }
+
+      // ── C#: ASP.NET [HttpGet("/path")] or [Route("/path")] ──
+      if (lower.endsWith('.cs')) {
+        const aspRegex =
+          /\[(Http(Get|Post|Put|Patch|Delete))\s*(?:\(\s*"([^"]*)")?/g;
+        let match: RegExpExecArray | null;
+        const routeAttr = /\[Route\s*\(\s*"([^"]*)"/;
+        const routeMatch = routeAttr.exec(content);
+        const aspBase = routeMatch ? routeMatch[1] : '';
+        while ((match = aspRegex.exec(content)) !== null) {
+          const path =
+            `${aspBase}/${match[3] ?? ''}`.replace(/\/+/g, '/') || '/';
+          endpoints.push({
+            method: match[2].toUpperCase(),
+            path,
+            file: filePath,
+          });
+        }
+      }
+
+      // ── Ruby: Rails routes.rb ──
+      if (
+        lower.endsWith('.rb') &&
+        (lower.includes('routes') || lower.includes('controller'))
+      ) {
+        const railsRegex = /(?:get|post|put|patch|delete)\s+['"]([^'"]+)['"]/g;
+        let match: RegExpExecArray | null;
+        while ((match = railsRegex.exec(content)) !== null) {
+          const method = content
+            .slice(match.index, match.index + 6)
+            .trim()
+            .toUpperCase();
+          endpoints.push({ method, path: match[1], file: filePath });
+        }
+        // resources :name
+        const resourceRegex = /resources?\s+:([\w]+)/g;
+        while ((match = resourceRegex.exec(content)) !== null) {
+          endpoints.push({
+            method: 'CRUD',
+            path: `/${match[1]}`,
+            file: filePath,
+          });
+        }
+      }
+
+      // ── PHP: Laravel routes ──
+      if (lower.endsWith('.php')) {
+        const laravelRegex =
+          /Route::(get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/g;
+        let match: RegExpExecArray | null;
+        while ((match = laravelRegex.exec(content)) !== null) {
+          endpoints.push({
+            method: match[1].toUpperCase(),
+            path: match[2],
             file: filePath,
           });
         }
@@ -178,75 +479,118 @@ export class ArchDocService {
     return endpoints;
   }
 
-  // ── Folder descriptions ───────────────────────────────────────────────────
-  private buildFolderDescriptions(
-    fileMap: Map<string, string>,
-  ): Record<string, string> {
-    const folderFiles = new Map<string, string[]>();
-    for (const fp of fileMap.keys()) {
-      const parts = fp.split('/');
-      const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : '.';
-      if (!folderFiles.has(folder)) folderFiles.set(folder, []);
-      folderFiles.get(folder)!.push(parts[parts.length - 1]);
-    }
-    const descriptions: Record<string, string> = {};
-    for (const [folder, files] of folderFiles) {
-      descriptions[folder] =
-        `Contains: ${files.slice(0, 8).join(', ')}${files.length > 8 ? ` (+${files.length - 8} more)` : ''}`;
-    }
-    return descriptions;
-  }
-
   // ── LLM summary ──────────────────────────────────────────────────────────
   private async generateSummary(
     repoName: string,
     fileMap: Map<string, string>,
     endpoints: ApiEndpoint[],
-    folders: Record<string, string>,
   ): Promise<string> {
-    // Pick representative files (README, index, main, app)
-    const keyPatterns = [
+    // Broader key-file patterns covering configs, models, routes, services for many languages
+    const highPriority = [
       'readme',
+      // JS/TS
+      'package.json',
+      // Python
+      'requirements.txt',
+      'pyproject.toml',
+      'setup.py',
+      'pipfile',
+      // Java/Kotlin
+      'pom.xml',
+      'build.gradle',
+      // Go
+      'go.mod',
+      // Rust
+      'cargo.toml',
+      // C#
+      '.csproj',
+      '.sln',
+      // Ruby
+      'gemfile',
+      // PHP
+      'composer.json',
+      // General
+      'docker',
+      'makefile',
+      '.env.example',
+    ];
+    const medPriority = [
+      // Common patterns
       'index',
       'main',
       'app',
       'server',
-      'package.json',
+      'config',
+      'route',
+      'controller',
+      'service',
+      'model',
+      'schema',
+      'entity',
+      'middleware',
+      'module',
+      // Python
+      'views',
+      'urls',
+      'serializer',
+      'manage.py',
+      'wsgi',
+      'asgi',
+      'settings',
+      // Java
+      'application',
+      'repository',
+      'dto',
+      'mapper',
+      // Go
+      'handler',
+      'cmd/',
+      'internal/',
+      // Ruby
+      'gemspec',
+      'rakefile',
     ];
-    const keyFiles: string[] = [];
+
+    const highFiles: string[] = [];
+    const medFiles: string[] = [];
     for (const [fp, content] of fileMap) {
-      if (
-        keyPatterns.some((p) => fp.toLowerCase().includes(p)) &&
-        keyFiles.length < 5
+      const lower = fp.toLowerCase();
+      if (highPriority.some((p) => lower.includes(p)) && highFiles.length < 5) {
+        highFiles.push(`### ${fp}\n${content.slice(0, 1500)}`);
+      } else if (
+        medPriority.some((p) => lower.includes(p)) &&
+        medFiles.length < 10
       ) {
-        keyFiles.push(`### ${fp}\n${content.slice(0, 800)}`);
+        medFiles.push(`### ${fp}\n${content.slice(0, 1200)}`);
       }
     }
 
+    // Build a file tree listing for project-structure awareness
+    const fileList = [...fileMap.keys()]
+      .sort()
+      .map((f) => `  ${f}`)
+      .join('\n');
+
     // Encode structured data as TOON to reduce prompt tokens
-    const endpointsToon = await toonEncode(endpoints.slice(0, 20));
-    const foldersToon = await toonEncode(
-      Object.entries(folders)
-        .slice(0, 15)
-        .map(([dir, desc]) => ({ dir, desc })),
-    );
+    const endpointsToon = await toonEncode(endpoints.slice(0, 30));
 
     const prompt = [
       `Repository: ${repoName}`,
       `Total files: ${fileMap.size}`,
-      ``,
+      '',
+      'File listing:',
+      fileList,
+      '',
       `API endpoints (${endpoints.length}):`,
       '```toon',
       endpointsToon,
       '```',
-      ``,
-      `Folder structure:`,
-      '```toon',
-      foldersToon,
-      '```',
       '',
-      'Key file snippets:',
-      keyFiles.join('\n\n'),
+      'High-priority file contents:',
+      highFiles.join('\n\n'),
+      '',
+      'Additional source files:',
+      medFiles.join('\n\n'),
     ].join('\n');
 
     try {
@@ -254,12 +598,20 @@ export class ArchDocService {
         [
           {
             role: 'system',
-            content:
-              'You are a senior software architect. Write a concise (3-5 paragraph) high-level architecture summary of the given repository for a new developer. Cover: purpose, tech stack, key modules, data flow, and entry points.',
+            content: [
+              'You are a senior software architect. Write a concise, well-detailed high-level architecture summary of the given repository for a new developer.',
+              'Cover: purpose, tech stack, key modules, data flow, and entry points.',
+              '',
+              'IMPORTANT RULES:',
+              '- ONLY describe what you can directly verify from the provided code, file names, and endpoints.',
+              '- DO NOT invent, assume, or guess features, libraries, or patterns that are not visible in the provided context.',
+              '- If you are unsure about something, omit it rather than guessing.',
+              '- Base your tech stack list strictly on imports, dependencies in package.json, and file extensions you can see.',
+            ].join('\n'),
           },
           { role: 'user', content: prompt },
         ],
-        { temperature: 0.3, maxTokens: 800 },
+        { temperature: 0.1, maxTokens: 1500 },
       );
     } catch (err: any) {
       this.logger.warn('LLM summary failed', err?.message);
@@ -273,7 +625,6 @@ export class ArchDocService {
     summary: string,
     dependencyGraph: string,
     endpoints: ApiEndpoint[],
-    folders: Record<string, string>,
   ): string {
     const endpointTable =
       endpoints.length > 0
@@ -285,10 +636,6 @@ export class ArchDocService {
             ),
           ].join('\n')
         : '_No endpoints detected_';
-
-    const folderList = Object.entries(folders)
-      .map(([dir, desc]) => `- **\`${dir}/\`** — ${desc}`)
-      .join('\n');
 
     return [
       `# Architecture: ${repoName}`,
@@ -303,9 +650,6 @@ export class ArchDocService {
       '',
       '## API Endpoints',
       endpointTable,
-      '',
-      '## Folder Structure',
-      folderList,
     ].join('\n');
   }
 }

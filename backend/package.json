@@ -34,6 +34,7 @@
     "chromadb": "^3.3.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.4",
+    "cohere-ai": "^7.20.0",
     "ioredis": "^5.10.0",
     "openai": "^6.27.0",
     "reflect-metadata": "^0.2.2",

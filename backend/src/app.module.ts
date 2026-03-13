@@ -9,6 +9,10 @@ import { QueryModule } from './query/query.module';
 import { ReposModule } from './repos/repos.module';
 import { HistoryModule } from './history/history.module';
 import { ArchDocModule } from './archdoc/archdoc.module';
+import { OnboardingModule } from './onboarding/onboarding.module';
+import { PrAnalysisModule } from './pr-analysis/pr-analysis.module';
+import { HealthModule } from './health/health.module';
+import { WebhookModule } from './webhook/webhook.module';
 
 @Module({
   imports: [
@@ -39,6 +43,10 @@ import { ArchDocModule } from './archdoc/archdoc.module';
     ReposModule,
     HistoryModule,
     ArchDocModule,
+    OnboardingModule,
+    PrAnalysisModule,
+    HealthModule,
+    WebhookModule,
   ],
   controllers: [AppController],
   providers: [AppService],
