@@ -4,6 +4,9 @@ import Parser from 'tree-sitter';
 import TypeScript from 'tree-sitter-typescript';
 import JavaScript from 'tree-sitter-javascript';
 import Python from 'tree-sitter-python';
+import Java from 'tree-sitter-java';
+import Go from 'tree-sitter-go';
+import Rust from 'tree-sitter-rust';
 
 export interface CodeChunk {
   content: string;
@@ -57,6 +60,9 @@ const GRAMMARS: Record<string, unknown> = {
   tsx: TypeScript.tsx,
   javascript: JavaScript,
   python: Python,
+  java: Java,
+  go: Go,
+  rust: Rust,
 };
 
 // AST node types that represent top-level semantic units per language
@@ -90,6 +96,33 @@ const TOP_LEVEL_NODES: Record<string, Set<string>> = {
     'function_definition',
     'class_definition',
     'decorated_definition',
+  ]),
+  java: new Set([
+    'class_declaration',
+    'interface_declaration',
+    'enum_declaration',
+    'method_declaration',
+    'constructor_declaration',
+    'annotation_type_declaration',
+    'record_declaration',
+  ]),
+  go: new Set([
+    'function_declaration',
+    'method_declaration',
+    'type_declaration',
+    'const_declaration',
+    'var_declaration',
+  ]),
+  rust: new Set([
+    'function_item',
+    'struct_item',
+    'enum_item',
+    'impl_item',
+    'trait_item',
+    'mod_item',
+    'const_item',
+    'static_item',
+    'type_item',
   ]),
 };
 
@@ -272,7 +305,9 @@ export class ChunkingService {
     return 'function';
   }
 
-  // ── File header: imports + exported symbol signatures ───────────────────
+  // ── File header: import / require / use / package statements ─────────────
+  // Only captures dependency imports — class/function/decorator declarations
+  // are already in the AST or block chunks and must NOT be duplicated here.
   private extractFileHeader(
     filePath: string,
     content: string,
@@ -280,78 +315,92 @@ export class ChunkingService {
   ): CodeChunk | null {
     const lines = content.split('\n');
     const headerLines: string[] = [];
+    let inMultiLineImport = false;
+    let braceDepth = 0;
+    let lastImportLine = 0;
 
-    for (const line of lines) {
+    for (let idx = 0; idx < lines.length; idx++) {
+      const line = lines[idx];
       const trimmed = line.trim();
       if (!trimmed) continue;
 
+      // Continue capturing multi-line import/require statements
+      if (inMultiLineImport) {
+        headerLines.push(line);
+        braceDepth += (trimmed.match(/[{(]/g) || []).length;
+        braceDepth -= (trimmed.match(/[})]/g) || []).length;
+        if (braceDepth <= 0) {
+          inMultiLineImport = false;
+          braceDepth = 0;
+          lastImportLine = idx;
+        }
+        continue;
+      }
+
+      // Only consider top-level lines (no indentation)
+      const indent = line.length - line.trimStart().length;
+      if (indent > 0) continue;
+
+      // Match ONLY import / require / package / use statements — nothing else
+      let matched = false;
+
       switch (language) {
         case 'python':
-          if (/^(import |from |class |def |async def )/.test(trimmed))
-            headerLines.push(line);
+          matched = /^(import |from \S+ import )/.test(trimmed);
           break;
         case 'java':
         case 'kotlin':
-          if (/^(import |package )/.test(trimmed)) headerLines.push(line);
-          else if (/^(public |private |protected |abstract |@\w)/.test(trimmed))
-            headerLines.push(line);
+          matched = /^(import |package )/.test(trimmed);
           break;
         case 'go':
-          if (/^(package |import |func |type |var )/.test(trimmed))
-            headerLines.push(line);
+          matched = /^(package |import )/.test(trimmed);
           break;
         case 'rust':
-          if (/^(use |mod |pub |fn |struct |enum |trait |impl )/.test(trimmed))
-            headerLines.push(line);
+          matched = /^(use |mod )/.test(trimmed);
           break;
         case 'cs':
-          if (/^(using |namespace )/.test(trimmed)) headerLines.push(line);
-          else if (
-            /^(public |private |protected |internal |\[\w)/.test(trimmed)
-          )
-            headerLines.push(line);
+          matched = /^using /.test(trimmed);
           break;
         case 'php':
-          if (/^(use |namespace |require|include)/.test(trimmed))
-            headerLines.push(line);
-          else if (/^(class |function |interface |trait )/.test(trimmed))
-            headerLines.push(line);
+          matched = /^(use |namespace |require|include)/.test(trimmed);
           break;
         case 'ruby':
-          if (/^(require |require_relative |class |module |def )/.test(trimmed))
-            headerLines.push(line);
+          matched = /^(require |require_relative )/.test(trimmed);
           break;
         case 'c':
         case 'cpp':
-          if (/^#include\s/.test(trimmed)) headerLines.push(line);
-          else if (/^(class |struct |enum |namespace |typedef )/.test(trimmed))
-            headerLines.push(line);
+          matched = /^#include\s/.test(trimmed);
           break;
         default:
-          // JS/TS
-          if (
+          // JS/TS — only import and require()
+          matched =
             /^import\s/.test(trimmed) ||
-            /^(const|let|var)\s+\S+\s*=\s*require\s*\(/.test(trimmed)
-          )
-            headerLines.push(line);
-          else if (
-            /^(export\s+|@\w)/.test(trimmed) ||
-            /^(class|function|const|type|interface|enum)\s/.test(trimmed)
-          )
-            headerLines.push(line);
+            /^(const|let|var)\s+\S+\s*=\s*require\s*\(/.test(trimmed);
           break;
+      }
+
+      if (matched) {
+        headerLines.push(line);
+        lastImportLine = idx;
+
+        // Detect start of multi-line import/require/use statements
+        braceDepth = (trimmed.match(/[{(]/g) || []).length;
+        braceDepth -= (trimmed.match(/[})]/g) || []).length;
+        if (braceDepth > 0) {
+          inMultiLineImport = true;
+        }
       }
     }
 
-    if (headerLines.length < 3) return null;
+    if (headerLines.length < 2) return null;
 
     return {
-      content: `// ${filePath} — imports & exports\n${headerLines.join('\n')}`,
+      content: `// ${filePath} — imports\n${headerLines.join('\n')}`,
       filePath,
       language,
       chunkType: 'function',
       startLine: 1,
-      endLine: lines.length,
+      endLine: lastImportLine + 1,
     };
   }
 

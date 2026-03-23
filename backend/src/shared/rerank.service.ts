@@ -53,9 +53,7 @@ export class RerankService implements OnModuleInit {
         topN: Math.min(topN, documents.length),
       });
 
-      const indices = response.results.map(
-        (r: { index: number }) => r.index,
-      );
+      const indices = response.results.map((r: { index: number }) => r.index);
       this.logger.debug(
         `Re-ranked ${documents.length} docs → top ${indices.length}`,
       );

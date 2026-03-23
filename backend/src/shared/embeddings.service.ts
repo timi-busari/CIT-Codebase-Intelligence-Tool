@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
+import { CacheService } from './cache.service';
 
 @Injectable()
 export class EmbeddingsService implements OnModuleInit {
@@ -11,7 +12,10 @@ export class EmbeddingsService implements OnModuleInit {
   private ready = false;
   private dimension: number | null = null;
 
-  constructor(private config: ConfigService) {}
+  constructor(
+    private config: ConfigService,
+    private cache: CacheService,
+  ) {}
 
   onModuleInit() {
     const useOllama =
@@ -24,7 +28,7 @@ export class EmbeddingsService implements OnModuleInit {
       );
       this.model = this.config.get<string>(
         'OLLAMA_EMBEDDING_MODEL',
-        'nomic-embed-text',
+        'mxbai-embed-large',
       );
       this.provider = 'ollama';
       this.client = new OpenAI({
@@ -48,52 +52,78 @@ export class EmbeddingsService implements OnModuleInit {
     );
   }
 
+  /** Truncate text to stay within embedding model context limits */
+  private truncateForEmbedding(text: string): string {
+    if (!text) return '';
+    // mxbai-embed-large: 512 tokens. BERT tokenizer on code averages ~3 chars/token.
+    // 512 * 3 = 1536, but special chars/imports tokenize worse → use 1000 as safe limit.
+    const maxChars = this.model.includes('mxbai') ? 1000 : 4000;
+    if (text.length <= maxChars) return text;
+    return text.substring(0, maxChars);
+  }
+
   async embed(text: string): Promise<number[]> {
     if (!this.ready) throw new Error('Embedding service not initialized');
-    
-    // Debug logging
-    this.logger.log(`Embedding text: "${text}" (length: ${text.length})`);
-    
+
+    // Check cache first
+    const cached = await this.cache.getCachedEmbedding(text, this.model);
+    if (cached) return cached;
+
+    const safeText = this.truncateForEmbedding(text);
     const response = await this.client.embeddings.create({
       model: this.model,
-      input: text,
+      input: safeText,
     });
-    return response.data[0].embedding;
+    const vector = response.data[0].embedding;
+
+    // Store in cache (fire-and-forget)
+    this.cache.setCachedEmbedding(text, this.model, vector);
+
+    return vector;
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
     if (!this.ready) throw new Error('Embedding service not initialized');
     if (texts.length === 0) return [];
 
-    // OpenAI supports batching natively; Ollama may need individual calls
-    const batchSize = this.provider === 'openai' ? 100 : 1;
+    // OpenAI supports large batches; Ollama works with moderate batches
+    const batchSize = this.provider === 'openai' ? 100 : 10;
     const results: number[][] = [];
 
     for (let i = 0; i < texts.length; i += batchSize) {
       const batch = texts.slice(i, i + batchSize);
 
       // Safety check: truncate any texts that are still too long
-      const safeBatch = batch.map((text, idx) => {
-        const chars = text.length;
+      const safeBatch = batch.map((text) => this.truncateForEmbedding(text));
 
-        if (chars > 4000) {
-          // Conservative limit - ~1000 tokens max
-          const truncated = text.substring(0, 4000) + '\n...';
-          this.logger.warn(
-            `⚠️ TRUNCATING text ${i + idx}: ${chars} → ${truncated.length} chars`,
-          );
-          return truncated;
+      try {
+        const response = await this.client.embeddings.create({
+          model: this.model,
+          input: safeBatch,
+        });
+        results.push(...response.data.map((d) => d.embedding));
+      } catch (error) {
+        this.logger.warn(
+          `Batch of ${safeBatch.length} failed, falling back to individual embedding. Error: ${error.message}`,
+        );
+        // Fallback: embed each text individually
+        for (let j = 0; j < safeBatch.length; j++) {
+          try {
+            const resp = await this.client.embeddings.create({
+              model: this.model,
+              input: safeBatch[j],
+            });
+            results.push(resp.data[0].embedding);
+          } catch (itemError) {
+            this.logger.warn(
+              `Individual embed failed (len=${safeBatch[j].length}): ${itemError.message}. Skipping.`,
+            );
+            // Push a zero vector so indices stay aligned
+            const dim = this.dimension || (await this.getDimension());
+            results.push(new Array(dim).fill(0));
+          }
         }
-
-        this.logger.debug(`Embedding text ${i + idx}: ${chars} chars`);
-        return text;
-      });
-
-      const response = await this.client.embeddings.create({
-        model: this.model,
-        input: safeBatch,
-      });
-      results.push(...response.data.map((d) => d.embedding));
+      }
     }
 
     return results;

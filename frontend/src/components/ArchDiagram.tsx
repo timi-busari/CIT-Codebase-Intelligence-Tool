@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 
 interface ArchDiagramProps {
-  chart: string;
+  chart?: string;
   title?: string;
 }
 
@@ -12,7 +12,13 @@ export function ArchDiagram({ chart, title }: ArchDiagramProps) {
   useEffect(() => {
     let cancelled = false;
     async function render() {
-      if (!containerRef.current || !chart) return;
+      if (!containerRef.current) return;
+      const normalized = (chart ?? "").trim();
+      if (!normalized) {
+        containerRef.current.innerHTML =
+          '<span style="color: var(--text-muted); font-size:0.85rem">No architecture diagram was generated for this version.</span>';
+        return;
+      }
       try {
         const mermaid = (await import("mermaid")).default;
         mermaid.initialize({
@@ -21,14 +27,14 @@ export function ArchDiagram({ chart, title }: ArchDiagramProps) {
           securityLevel: "loose",
         });
         const id = `mermaid-${Math.random().toString(36).slice(2)}`;
-        const { svg } = await mermaid.render(id, chart);
+        const { svg } = await mermaid.render(id, normalized);
         if (!cancelled && containerRef.current) {
           containerRef.current.innerHTML = svg;
         }
       } catch (err) {
         console.error("Mermaid render error", err);
         if (!cancelled && containerRef.current) {
-          containerRef.current.innerHTML = `<pre style="color: var(--error); font-size:0.8rem">${chart}</pre>`;
+          containerRef.current.innerHTML = `<pre style="color: var(--error); font-size:0.8rem">${normalized}</pre>`;
         }
       }
     }

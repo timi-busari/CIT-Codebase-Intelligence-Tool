@@ -106,8 +106,7 @@ export interface ArchResult {
   repoId: string;
   repoName: string;
   summary: string;
-  dependencyGraph: string;
-  apiEndpoints: ApiEndpoint[];
+  architectureDiagram: string;
   markdown: string;
 }
 
@@ -126,6 +125,7 @@ export interface OnboardingResult {
   repoId: string;
   markdown: string;
   version: number;
+  apiEndpoints: ApiEndpoint[];
 }
 
 export interface PrAnalysis {

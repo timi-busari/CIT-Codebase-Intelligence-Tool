@@ -4,6 +4,7 @@ import { VectorstoreService } from './vectorstore.service';
 import { DatabaseService } from './database.service';
 import { LlmService } from './llm.service';
 import { RerankService } from './rerank.service';
+import { CacheService } from './cache.service';
 
 @Global()
 @Module({
@@ -13,6 +14,7 @@ import { RerankService } from './rerank.service';
     DatabaseService,
     LlmService,
     RerankService,
+    CacheService,
   ],
   exports: [
     EmbeddingsService,
@@ -20,6 +22,7 @@ import { RerankService } from './rerank.service';
     DatabaseService,
     LlmService,
     RerankService,
+    CacheService,
   ],
 })
 export class SharedModule {}

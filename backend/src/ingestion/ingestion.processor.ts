@@ -87,7 +87,10 @@ export class IngestionProcessor extends WorkerHost {
     super();
   }
 
-  private broadcast(job: Job<IngestionJobData>, progress: IngestionJobProgress) {
+  private broadcast(
+    job: Job<IngestionJobData>,
+    progress: IngestionJobProgress,
+  ) {
     this.gateway.emitProgress({
       jobId: job.id as string,
       repoId: job.data.repoId,
@@ -232,7 +235,10 @@ export class IngestionProcessor extends WorkerHost {
           this.broadcast(job, embedProgress);
         } catch (error) {
           this.logger.warn(
-            `Failed to embed batch starting at index ${i}: ${error.message}`,
+            `Failed to embed batch starting at index ${i} (${batch.length} chunks): ${error.message}`,
+          );
+          this.logger.warn(
+            `Batch content lengths: ${contents.map((c) => c.length).join(', ')}`,
           );
         }
       }

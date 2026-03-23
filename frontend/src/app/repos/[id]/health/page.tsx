@@ -50,20 +50,27 @@ function FileMetricTable({ title, icon, files }: { title: string; icon: string; 
 
 export default function HealthPage() {
   const { id } = useParams<{ id: string }>();
-  const [report, setReport] = useState<HealthReport | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [computing, setComputing] = useState(false);
-  const [error, setError] = useState("");
+  const [state, setState] = useState<{
+    report: HealthReport | null;
+    loading: boolean;
+    computing: boolean;
+    error: string;
+  }>({
+    report: null,
+    loading: false,
+    computing: false,
+    error: "",
+  });
 
   const loadReport = async () => {
-    setLoading(true);
+    setState((s) => ({ ...s, loading: true }));
     try {
       const r = await api.getHealth(id);
-      setReport(r);
+      setState((s) => ({ ...s, report: r }));
     } catch {
       /* no report yet */
     } finally {
-      setLoading(false);
+      setState((s) => ({ ...s, loading: false }));
     }
   };
 
@@ -72,15 +79,14 @@ export default function HealthPage() {
   }, [id]);
 
   const compute = async () => {
-    setComputing(true);
-    setError("");
+    setState((s) => ({ ...s, computing: true, error: "" }));
     try {
       await api.computeHealth(id);
       await loadReport();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setState((s) => ({ ...s, error: err instanceof Error ? err.message : String(err) }));
     } finally {
-      setComputing(false);
+      setState((s) => ({ ...s, computing: false }));
     }
   };
 
@@ -97,29 +103,29 @@ export default function HealthPage() {
         actions={
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <Link href={`/repos/${id}`} className="btn btn-secondary btn-sm">← Repo</Link>
-            <button className="btn btn-primary btn-sm" onClick={compute} disabled={computing}>
-              {computing ? (<><span className="spinner" /> Analyzing…</>) : "🩺 Compute Health"}
+            <button className="btn btn-primary btn-sm" onClick={compute} disabled={state.computing}>
+              {state.computing ? (<><span className="spinner" /> Analyzing…</>) : "🩺 Compute Health"}
             </button>
           </div>
         }
       />
       <div className="page">
-        {error && (
+        {state.error && (
           <div style={{ color: "var(--error)", background: "rgba(239,68,68,0.08)", padding: "0.75rem 1rem", borderRadius: "var(--radius-sm)", marginBottom: "1rem" }}>
-            {error}
+            {state.error}
           </div>
         )}
 
-        {(loading || computing) && !report && (
+        {(state.loading || state.computing) && !state.report && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", padding: "3rem" }}>
             <span className="spinner" style={{ width: 36, height: 36, borderWidth: 3 }} />
             <p style={{ color: "var(--text-secondary)" }}>
-              {computing ? "Analyzing codebase…" : "Loading report…"}
+              {state.computing ? "Analyzing codebase…" : "Loading report…"}
             </p>
           </div>
         )}
 
-        {!report && !loading && !computing && (
+        {!state.report && !state.loading && !state.computing && (
           <div className="empty-state">
             <div className="empty-state-icon">🩺</div>
             <div className="empty-state-title">No health report yet</div>
@@ -130,42 +136,42 @@ export default function HealthPage() {
           </div>
         )}
 
-        {report && (
+        {state.report && (
           <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
             {/* Summary cards */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "1rem" }}>
               <MetricCard
                 label="Health Score"
-                value={report.healthScore}
-                sub={report.healthScore >= 80 ? "Good" : report.healthScore >= 60 ? "Fair" : "Needs work"}
+                value={state.report.healthScore}
+                sub={state.report.healthScore >= 80 ? "Good" : state.report.healthScore >= 60 ? "Fair" : "Needs work"}
               />
-              <MetricCard label="Total Files" value={report.totalFiles} />
-              <MetricCard label="Total LOC" value={report.totalLoc.toLocaleString()} />
-              <MetricCard label="Avg Complexity" value={report.avgComplexity.toFixed(1)} />
+              <MetricCard label="Total Files" value={state.report.totalFiles} />
+              <MetricCard label="Total LOC" value={state.report.totalLoc.toLocaleString()} />
+              <MetricCard label="Avg Complexity" value={state.report.avgComplexity.toFixed(1)} />
             </div>
 
             {/* Health score bar */}
             <div className="card" style={{ padding: "1rem" }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
                 <span style={{ fontWeight: 600, fontSize: "0.9rem" }}>Overall Health</span>
-                <span style={{ fontWeight: 700, color: scoreColor(report.healthScore) }}>{report.healthScore}/100</span>
+                <span style={{ fontWeight: 700, color: scoreColor(state.report.healthScore) }}>{state.report.healthScore}/100</span>
               </div>
               <div style={{ background: "var(--bg-tertiary)", borderRadius: 8, height: 12, overflow: "hidden" }}>
-                <div style={{ width: `${report.healthScore}%`, height: "100%", background: scoreColor(report.healthScore), borderRadius: 8, transition: "width 0.5s" }} />
+                <div style={{ width: `${state.report.healthScore}%`, height: "100%", background: scoreColor(state.report.healthScore), borderRadius: 8, transition: "width 0.5s" }} />
               </div>
             </div>
 
             {/* LOC Distribution */}
-            {report.locDistribution?.length > 0 && (
+            {state.report.locDistribution?.length > 0 && (
               <section>
                 <h3 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "0.5rem" }}>📊 LOC Distribution</h3>
                 <div className="card">
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                    {report.locDistribution.map((d) => (
+                    {state.report.locDistribution.map((d) => (
                       <div key={d.bracket} style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
                         <span style={{ fontSize: "0.8rem", minWidth: 100 }}>{d.bracket}</span>
                         <div style={{ flex: 1, background: "var(--bg-tertiary)", borderRadius: 4, height: 18, overflow: "hidden" }}>
-                          <div style={{ width: `${Math.min((d.count / report.totalFiles) * 100, 100)}%`, height: "100%", background: "var(--accent)", borderRadius: 4 }} />
+                          <div style={{ width: `${Math.min((d.count / (state.report?.totalFiles ?? 1)) * 100, 100)}%`, height: "100%", background: "var(--accent)", borderRadius: 4 }} />
                         </div>
                         <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", minWidth: 30, textAlign: "right" }}>{d.count}</span>
                       </div>
@@ -175,9 +181,9 @@ export default function HealthPage() {
               </section>
             )}
 
-            <FileMetricTable title="Most Complex Files" icon="🔴" files={report.topComplexFiles} />
-            <FileMetricTable title="Largest Files" icon="📏" files={report.largestFiles} />
-            <FileMetricTable title="TODO Hotspots" icon="📝" files={report.todoHotspots} />
+            <FileMetricTable title="Most Complex Files" icon="🔴" files={state.report.topComplexFiles} />
+            <FileMetricTable title="Largest Files" icon="📏" files={state.report.largestFiles} />
+            <FileMetricTable title="TODO Hotspots" icon="📝" files={state.report.todoHotspots} />
           </div>
         )}
       </div>

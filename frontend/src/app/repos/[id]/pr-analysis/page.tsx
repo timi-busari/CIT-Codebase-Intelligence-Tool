@@ -8,37 +8,49 @@ import { api, PrAnalysis, Repo } from "@/lib/api";
 
 export default function PrAnalysisPage() {
   const { id } = useParams<{ id: string }>();
-  const [repo, setRepo] = useState<Repo | null>(null);
-  const [analyses, setAnalyses] = useState<PrAnalysis[]>([]);
-  const [selected, setSelected] = useState<PrAnalysis | null>(null);
-  const [prNumber, setPrNumber] = useState("");
-  const [githubToken, setGithubToken] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [state, setState] = useState<{
+    repo: Repo | null;
+    analyses: PrAnalysis[];
+    selected: PrAnalysis | null;
+    prNumber: string;
+    githubToken: string;
+    loading: boolean;
+    error: string;
+  }>({
+    repo: null,
+    analyses: [],
+    selected: null,
+    prNumber: "",
+    githubToken: "",
+    loading: false,
+    error: "",
+  });
 
   useEffect(() => {
-    api.getRepo(id).then(setRepo).catch(() => {});
-    api.listPrAnalyses(id).then(setAnalyses).catch(() => {});
+    api.getRepo(id).then((r) => setState((s) => ({ ...s, repo: r }))).catch(() => {});
+    api.listPrAnalyses(id).then((a) => setState((s) => ({ ...s, analyses: a }))).catch(() => {});
   }, [id]);
 
   const analyze = async () => {
-    if (!prNumber || !repo?.url) return;
-    setLoading(true);
-    setError("");
+    if (!state.prNumber || !state.repo?.url) return;
+    setState((s) => ({ ...s, loading: true, error: "" }));
     try {
       const result = await api.analyzePr({
         repoId: id,
-        repoUrl: repo.url,
-        prNumber: parseInt(prNumber, 10),
-        ...(githubToken ? { githubToken } : {}),
+        repoUrl: state.repo.url,
+        prNumber: parseInt(state.prNumber, 10),
+        ...(state.githubToken ? { githubToken: state.githubToken } : {}),
       });
-      setSelected(result);
-      setAnalyses((prev) => [result, ...prev]);
-      setPrNumber("");
+      setState((s) => ({
+        ...s,
+        selected: result,
+        analyses: [result, ...s.analyses],
+        prNumber: "",
+      }));
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
+      setState((s) => ({ ...s, error: err instanceof Error ? err.message : String(err) }));
     } finally {
-      setLoading(false);
+      setState((s) => ({ ...s, loading: false }));
     }
   };
 
@@ -51,16 +63,16 @@ export default function PrAnalysisPage() {
         }
       />
       <div className="page">
-        {error && (
+        {state.error && (
           <div style={{ color: "var(--error)", background: "rgba(239,68,68,0.08)", padding: "0.75rem 1rem", borderRadius: "var(--radius-sm)", marginBottom: "1rem" }}>
-            {error}
+            {state.error}
           </div>
         )}
 
         {/* Analyze form */}
         <section className="card" style={{ padding: "1rem", marginBottom: "1.5rem" }}>
           <h3 style={{ fontSize: "0.95rem", fontWeight: 600, marginBottom: "0.75rem" }}>Analyze a Pull Request</h3>
-          {!repo?.url ? (
+          {!state.repo?.url ? (
             <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
               This repository has no remote URL. PR analysis requires a GitHub repository.
             </p>
@@ -70,8 +82,8 @@ export default function PrAnalysisPage() {
                 <label style={{ fontSize: "0.75rem", color: "var(--text-muted)", display: "block", marginBottom: "0.25rem" }}>PR Number</label>
                 <input
                   type="number"
-                  value={prNumber}
-                  onChange={(e) => setPrNumber(e.target.value)}
+                  value={state.prNumber}
+                  onChange={(e) => setState((s) => ({ ...s, prNumber: e.target.value }))}
                   placeholder="e.g. 42"
                   className="input"
                   style={{ width: 120 }}
@@ -82,15 +94,15 @@ export default function PrAnalysisPage() {
                 <label style={{ fontSize: "0.75rem", color: "var(--text-muted)", display: "block", marginBottom: "0.25rem" }}>GitHub Token (optional)</label>
                 <input
                   type="password"
-                  value={githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
+                  value={state.githubToken}
+                  onChange={(e) => setState((s) => ({ ...s, githubToken: e.target.value }))}
                   placeholder="ghp_..."
                   className="input"
                   style={{ width: 220 }}
                 />
               </div>
-              <button className="btn btn-primary btn-sm" onClick={analyze} disabled={loading || !prNumber}>
-                {loading ? (<><span className="spinner" /> Analyzing…</>) : "🔍 Analyze PR"}
+              <button className="btn btn-primary btn-sm" onClick={analyze} disabled={state.loading || !state.prNumber}>
+                {state.loading ? (<><span className="spinner" /> Analyzing…</>) : "🔍 Analyze PR"}
               </button>
             </div>
           )}
@@ -100,15 +112,15 @@ export default function PrAnalysisPage() {
           {/* Past analyses list */}
           <div style={{ width: 280, flexShrink: 0 }}>
             <h3 style={{ fontSize: "0.9rem", fontWeight: 600, marginBottom: "0.5rem" }}>Past Analyses</h3>
-            {analyses.length === 0 ? (
+            {state.analyses.length === 0 ? (
               <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>No analyses yet.</p>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                {analyses.map((a) => (
+                {state.analyses.map((a) => (
                   <button
                     key={a.id}
-                    className={`btn btn-sm ${selected?.id === a.id ? "btn-primary" : "btn-secondary"}`}
-                    onClick={() => setSelected(a)}
+                    className={`btn btn-sm ${state.selected?.id === a.id ? "btn-primary" : "btn-secondary"}`}
+                    onClick={() => setState((s) => ({ ...s, selected: a }))}
                     style={{ textAlign: "left", justifyContent: "flex-start" }}
                   >
                     PR #{a.prNumber} — {new Date(a.createdAt).toLocaleDateString()}
@@ -120,7 +132,7 @@ export default function PrAnalysisPage() {
 
           {/* Detail view */}
           <div style={{ flex: 1 }}>
-            {!selected ? (
+            {!state.selected ? (
               <div className="empty-state">
                 <div className="empty-state-icon">🔍</div>
                 <div className="empty-state-title">Select or analyze a PR</div>
@@ -129,11 +141,11 @@ export default function PrAnalysisPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
                 <div className="card" style={{ padding: "1rem" }}>
                   <h3 style={{ fontSize: "1rem", fontWeight: 700, marginBottom: "0.5rem" }}>
-                    PR #{selected.prNumber}
+                    PR #{state.selected.prNumber}
                   </h3>
-                  {selected.prUrl && (
+                  {state.selected.prUrl && (
                     <a
-                      href={selected.prUrl}
+                      href={state.selected.prUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       style={{ fontSize: "0.8rem", color: "var(--accent)" }}
@@ -146,16 +158,16 @@ export default function PrAnalysisPage() {
                 <section>
                   <h4 style={{ fontSize: "0.95rem", fontWeight: 600, marginBottom: "0.5rem" }}>📋 Summary</h4>
                   <div className="card" style={{ padding: "1rem" }}>
-                    <MarkdownRenderer content={selected.summary} />
+                    <MarkdownRenderer content={state.selected.summary} />
                   </div>
                 </section>
 
-                {selected.filesChanged?.length > 0 && (
+                {state.selected.filesChanged?.length > 0 && (
                   <section>
-                    <h4 style={{ fontSize: "0.95rem", fontWeight: 600, marginBottom: "0.5rem" }}>📁 Files Changed ({selected.filesChanged.length})</h4>
+                    <h4 style={{ fontSize: "0.95rem", fontWeight: 600, marginBottom: "0.5rem" }}>📁 Files Changed ({state.selected.filesChanged.length})</h4>
                     <div className="card" style={{ padding: "0.75rem 1rem" }}>
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
-                        {selected.filesChanged.map((f) => (
+                        {state.selected.filesChanged.map((f) => (
                           <code key={f} style={{ fontSize: "0.8rem" }}>{f}</code>
                         ))}
                       </div>
@@ -163,12 +175,12 @@ export default function PrAnalysisPage() {
                   </section>
                 )}
 
-                {selected.risks?.length > 0 && (
+                {state.selected.risks?.length > 0 && (
                   <section>
                     <h4 style={{ fontSize: "0.95rem", fontWeight: 600, marginBottom: "0.5rem" }}>⚠️ Risks</h4>
                     <div className="card" style={{ padding: "0.75rem 1rem" }}>
                       <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
-                        {selected.risks.map((r, i) => (
+                        {state.selected.risks.map((r, i) => (
                           <li key={i} style={{ fontSize: "0.85rem", lineHeight: 1.6 }}>{r}</li>
                         ))}
                       </ul>

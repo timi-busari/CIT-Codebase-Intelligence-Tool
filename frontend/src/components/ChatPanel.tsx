@@ -72,35 +72,40 @@ export function ChatPanel({
   onMessagesChange,
   initialMessages = [],
 }: ChatPanelProps) {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
-  const [ui, setUi] = useState({ input: "", loading: false });
+  const [state, setState] = useState<{
+    messages: Message[];
+    input: string;
+    loading: boolean;
+  }>({
+    messages: initialMessages,
+    input: "",
+    loading: false,
+  });
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [state.messages]);
 
   // Only persist messages after streaming completes (loading → false)
   // to avoid saving empty/partial assistant responses during streaming.
   useEffect(() => {
-    if (!ui.loading) {
-      onMessagesChange?.(messages);
+    if (!state.loading) {
+      onMessagesChange?.(state.messages);
     }
-  }, [messages, ui.loading, onMessagesChange]);
+  }, [state.messages, state.loading, onMessagesChange]);
 
   const send = async () => {
-    const q = ui.input.trim();
-    if (!q || ui.loading) return;
+    const q = state.input.trim();
+    if (!q || state.loading) return;
 
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
       content: q,
     };
-    setMessages((prev) => [...prev, userMsg]);
-    setUi((s) => ({ ...s, input: "" }));
-    setUi((s) => ({ ...s, loading: true }));
+    setState((s) => ({ ...s, messages: [...s.messages, userMsg], input: "", loading: true }));
 
     // Create initial assistant message for streaming
     const assistantMsgId = (Date.now() + 1).toString();
@@ -110,11 +115,11 @@ export function ChatPanel({
       content: "",
       citations: [],
     };
-    setMessages((prev) => [...prev, assistantMsg]);
+    setState((s) => ({ ...s, messages: [...s.messages, assistantMsg] }));
 
     try {
       // Send conversation history for context-aware follow-ups
-      const historyMsgs = messages.map((m) => ({
+      const historyMsgs = state.messages.map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
       }));
@@ -129,41 +134,44 @@ export function ChatPanel({
         if (chunk.token) {
           fullContent += chunk.token;
           // Update the assistant message with streaming content
-          setMessages((prev) => 
-            prev.map((msg) => 
-              msg.id === assistantMsgId 
-                ? { ...msg, content: fullContent + "█" } // Add cursor
+          setState((s) => ({
+            ...s,
+            messages: s.messages.map((msg) =>
+              msg.id === assistantMsgId
+                ? { ...msg, content: fullContent + "█" }
                 : msg
-            )
-          );
+            ),
+          }));
         }
         if (chunk.citations) {
           citations = chunk.citations;
         }
         if (chunk.done) {
           // Remove cursor and set final content with citations
-          setMessages((prev) => 
-            prev.map((msg) => 
-              msg.id === assistantMsgId 
+          setState((s) => ({
+            ...s,
+            messages: s.messages.map((msg) =>
+              msg.id === assistantMsgId
                 ? { ...msg, content: fullContent, citations }
                 : msg
-            )
-          );
+            ),
+          }));
           break;
         }
       }
     } catch (err: unknown) {
       // Replace the streaming message with error message
       const errContent = `Error: ${err instanceof Error ? err.message : String(err)}`;
-      setMessages((prev) => 
-        prev.map((msg) => 
-          msg.id === assistantMsgId 
+      setState((s) => ({
+        ...s,
+        messages: s.messages.map((msg) =>
+          msg.id === assistantMsgId
             ? { ...msg, content: errContent, citations: [] }
             : msg
-        )
-      );
+        ),
+      }));
     } finally {
-      setUi((s) => ({ ...s, loading: false }));
+      setState((s) => ({ ...s, loading: false }));
     }
   };
 
@@ -194,7 +202,7 @@ export function ChatPanel({
     <div className="chat-layout">
       {/* Messages */}
       <div className="messages-list">
-        {messages.length === 0 && (
+        {state.messages.length === 0 && (
           <div className="empty-state">
             <div className="empty-state-icon">💬</div>
             <div className="empty-state-title">Start a conversation</div>
@@ -203,7 +211,7 @@ export function ChatPanel({
             </p>
           </div>
         )}
-        {messages.map((msg) => (
+        {state.messages.map((msg) => (
           <div key={msg.id} className={`message ${msg.role}`}>
             <div className="message-avatar">
               {msg.role === "user" ? "👤" : "🤖"}
@@ -223,7 +231,7 @@ export function ChatPanel({
               )}
               {msg.role === "assistant" && (
                 <BookmarkButton
-                  question={messages[messages.indexOf(msg) - 1]?.content ?? ""}
+                  question={state.messages[state.messages.indexOf(msg) - 1]?.content ?? ""}
                   answer={msg.content}
                   sources={msg.citations}
                   repoIds={repoIds}
@@ -232,7 +240,7 @@ export function ChatPanel({
             </div>
           </div>
         ))}
-        {ui.loading && (
+        {state.loading && (
           <div className="message">
             <div className="message-avatar">🤖</div>
             <div
@@ -258,18 +266,18 @@ export function ChatPanel({
             ref={textareaRef}
             className="chat-input"
             placeholder="Ask a question about the codebase… (Enter to send, Shift+Enter for newline)"
-            value={ui.input}
-            onChange={(e) => setUi((s) => ({ ...s, input: e.target.value }))}
+            value={state.input}
+            onChange={(e) => setState((s) => ({ ...s, input: e.target.value }))}
             onKeyDown={handleKeyDown}
-            disabled={ui.loading}
+            disabled={state.loading}
             rows={1}
           />
           <button
             className="btn btn-primary"
             onClick={send}
-            disabled={ui.loading || !ui.input.trim()}
+            disabled={state.loading || !state.input.trim()}
           >
-            {ui.loading ? <span className="spinner" /> : "↑ Send"}
+            {state.loading ? <span className="spinner" /> : "↑ Send"}
           </button>
         </div>
       </div>

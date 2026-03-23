@@ -142,9 +142,11 @@ export class VectorstoreService {
   }
 
   /** Retrieve all chunks for a repo without needing an embedding vector. */
-  async getAll(
-    repoId: string,
-  ): Promise<{ ids: string[]; documents: string[]; metadatas: ChunkMetadata[] } | null> {
+  async getAll(repoId: string): Promise<{
+    ids: string[];
+    documents: string[];
+    metadatas: ChunkMetadata[];
+  } | null> {
     try {
       const collection = await this.getOrCreateCollection(repoId);
       const count = await collection.count();
@@ -162,10 +164,7 @@ export class VectorstoreService {
   }
 
   /** Delete chunks matching specific file paths from a repo collection */
-  async deleteByFilePaths(
-    repoId: string,
-    filePaths: string[],
-  ): Promise<void> {
+  async deleteByFilePaths(repoId: string, filePaths: string[]): Promise<void> {
     if (filePaths.length === 0) return;
     try {
       const collection = await this.getOrCreateCollection(repoId);

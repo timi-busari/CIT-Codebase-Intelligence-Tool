@@ -34,9 +34,7 @@ export class PrAnalysisService {
     const { repoId, repoUrl, prNumber, githubToken } = dto;
 
     // Parse owner/repo from URL
-    const match = repoUrl.match(
-      /github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/,
-    );
+    const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
     if (!match) {
       throw new BadRequestException(
         'Invalid GitHub repo URL. Expected format: https://github.com/owner/repo',
@@ -118,7 +116,9 @@ Respond in this exact JSON format:
       try {
         // Try to extract JSON from the response
         const jsonMatch = response.match(/\{[\s\S]*\}/);
-        analysis = jsonMatch ? JSON.parse(jsonMatch[0]) : { summary: response, risks: [] };
+        analysis = jsonMatch
+          ? JSON.parse(jsonMatch[0])
+          : { summary: response, risks: [] };
       } catch {
         analysis = { summary: response, risks: [] };
       }

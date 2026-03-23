@@ -33,7 +33,7 @@ export class LlmService implements OnModuleInit {
         'OLLAMA_BASE_URL',
         'http://localhost:11434',
       );
-      this.model = this.config.get<string>('OLLAMA_MODEL', 'llama3.2:1b');
+      this.model = this.config.get<string>('OLLAMA_MODEL', 'qwen3:8b');
       this.provider = 'ollama';
       // Ollama exposes an OpenAI-compatible endpoint at /v1
       this.client = new OpenAI({
@@ -57,7 +57,7 @@ export class LlmService implements OnModuleInit {
     messages: LlmMessage[],
     options: LlmOptions = {},
   ): Promise<string> {
-    const { temperature = 0.2, maxTokens = 1500 } = options;
+    const { temperature = 0.2, maxTokens = 4096 } = options;
     const MAX_RETRIES = 3;
     let lastErr: any;
 
@@ -111,7 +111,7 @@ export class LlmService implements OnModuleInit {
     messages: LlmMessage[],
     options: LlmOptions = {},
   ): AsyncGenerator<string, void, unknown> {
-    const { temperature = 0.2, maxTokens = 1500 } = options;
+    const { temperature = 0.2, maxTokens = 4096 } = options;
     const MAX_RETRIES = 3;
     let lastErr: any;
 

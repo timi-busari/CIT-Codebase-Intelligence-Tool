@@ -39,15 +39,20 @@ const SHIKI_LANG_MAP: Record<string, string> = {
 };
 
 export function CodeBlock({ code, language = 'text', fileName, highlightLine }: CodeBlockProps) {
-  const [highlightedCode, setHighlightedCode] = useState<string>('');
-  const [copied, setCopied] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState<{
+    highlightedCode: string;
+    copied: boolean;
+    loading: boolean;
+  }>({
+    highlightedCode: '',
+    copied: false,
+    loading: true,
+  });
 
   useEffect(() => {
     async function highlight() {
       if (!code) {
-        setHighlightedCode('');
-        setLoading(false);
+        setState((s) => ({ ...s, highlightedCode: '', loading: false }));
         return;
       }
 
@@ -74,24 +79,24 @@ export function CodeBlock({ code, language = 'text', fileName, highlightLine }: 
           ],
         });
         
-        setHighlightedCode(html);
+        setState((s) => ({ ...s, highlightedCode: html }));
       } catch (error) {
         // Fallback for unsupported languages
         console.warn(`Failed to highlight code with language ${language}:`, error);
-        setHighlightedCode(`<pre class="shiki-fallback"><code>${escapeHtml(code)}</code></pre>`);
+        setState((s) => ({ ...s, highlightedCode: `<pre class="shiki-fallback"><code>${escapeHtml(code)}</code></pre>` }));
       } finally {
-        setLoading(false);
+        setState((s) => ({ ...s, loading: false }));
       }
     }
 
-    setLoading(true);
+    setState((s) => ({ ...s, loading: true }));
     highlight();
   }, [code, language, highlightLine]);
 
   const copy = async () => {
     await navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setState((s) => ({ ...s, copied: true }));
+    setTimeout(() => setState((s) => ({ ...s, copied: false })), 2000);
   };
 
   const escapeHtml = (text: string): string => {
@@ -116,12 +121,12 @@ export function CodeBlock({ code, language = 'text', fileName, highlightLine }: 
             onClick={copy} 
             title="Copy code"
           >
-            {copied ? '✓' : '📋'}
+            {state.copied ? '✓' : '📋'}
           </button>
         </div>
       </div>
       <div className="code-content">
-        {loading ? (
+        {state.loading ? (
           <div className="code-loading">
             <span className="spinner" />
             <span>Loading syntax highlighting...</span>
@@ -129,7 +134,7 @@ export function CodeBlock({ code, language = 'text', fileName, highlightLine }: 
         ) : (
           <div 
             className="shiki-container"
-            dangerouslySetInnerHTML={{ __html: highlightedCode }}
+            dangerouslySetInnerHTML={{ __html: state.highlightedCode }}
           />
         )}
       </div>
